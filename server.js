@@ -36,30 +36,6 @@ const authenticateToken = (req, res, next) => {
 
 // --- ROTAS DE AUTENTICAÇÃO (PÚBLICAS) ---
 
-// Rota para registrar um novo usuário
-app.post('/api/auth/register', async (req, res) => {
-  const { username, password, name } = req.body;
-  if (!username || !password || !name) {
-    return res.status(400).json({ error: 'Todos os campos são obrigatórios.' });
-  }
-
-  try {
-    const existingUser = await prisma.user.findUnique({ where: { username } });
-    if (existingUser) {
-      return res.status(409).json({ error: 'Nome de usuário já existe.' });
-    }
-
-    const passwordHash = await bcrypt.hash(password, 10);
-    const user = await prisma.user.create({
-      data: { username, passwordHash, name },
-    });
-    res.status(201).json({ id: user.id, username: user.username, name: user.name });
-  } catch (error) {
-    console.error("Register error:", error);
-    res.status(500).json({ error: 'Erro ao registrar usuário.' });
-  }
-});
-
 // Rota para login de usuário
 app.post('/api/auth/login', async (req, res) => {
   const { username, password } = req.body;
@@ -83,95 +59,6 @@ app.post('/api/auth/login', async (req, res) => {
   } catch (error) {
     console.error("Login error:", error);
     res.status(500).json({ error: 'Erro no servidor durante o login.' });
-  }
-});
-
-
-// --- ROTAS DE GERENCIAMENTO DE USUÁRIOS (PROTEGIDAS) ---
-
-// Listar todos os usuários
-app.get('/api/users', authenticateToken, async (req, res) => {
-  try {
-    const users = await prisma.user.findMany({
-      select: { id: true, username: true, name: true, createdAt: true, updatedAt: true },
-      orderBy: { name: 'asc' },
-    });
-    res.json(users);
-  } catch (error) {
-    console.error("Get Users error:", error);
-    res.status(500).json({ error: 'Erro ao buscar usuários.' });
-  }
-});
-
-// Criar um novo usuário
-app.post('/api/users', authenticateToken, async (req, res) => {
-  const { username, password, name } = req.body;
-  if (!username || !password || !name) {
-    return res.status(400).json({ error: 'Nome de usuário, senha e nome completo são obrigatórios.' });
-  }
-  try {
-    const passwordHash = await bcrypt.hash(password, 10);
-    const newUser = await prisma.user.create({
-      data: { username, passwordHash, name },
-      select: { id: true, username: true, name: true, createdAt: true, updatedAt: true },
-    });
-    res.status(201).json(newUser);
-  } catch (error) {
-    if (error.code === 'P2002') { // Prisma unique constraint violation
-      return res.status(409).json({ error: 'Nome de usuário já existe.' });
-    }
-    console.error("Create User error:", error);
-    res.status(500).json({ error: 'Erro ao criar usuário.' });
-  }
-});
-
-// Atualizar um usuário
-app.put('/api/users/:id', authenticateToken, async (req, res) => {
-  const { id } = req.params;
-  const { name, username, password } = req.body;
-
-  if (!name || !username) {
-    return res.status(400).json({ error: 'Nome e nome de usuário são obrigatórios.' });
-  }
-  
-  try {
-    const dataToUpdate = { name, username, passwordHash: undefined };
-    if (password) {
-      dataToUpdate.passwordHash = await bcrypt.hash(password, 10);
-    } else {
-      delete dataToUpdate.passwordHash;
-    }
-    
-    const updatedUser = await prisma.user.update({
-      where: { id },
-      data: dataToUpdate,
-      select: { id: true, username: true, name: true, createdAt: true, updatedAt: true },
-    });
-    res.json(updatedUser);
-  } catch (error) {
-    if (error.code === 'P2002') {
-        return res.status(409).json({ error: 'Nome de usuário já existe.' });
-    }
-    console.error("Update User error:", error);
-    res.status(500).json({ error: 'Erro ao atualizar usuário.' });
-  }
-});
-
-// Deletar um usuário
-app.delete('/api/users/:id', authenticateToken, async (req, res) => {
-  const { id } = req.params;
-  
-  // Medida de segurança: não permitir que o usuário logado se auto-delete
-  if (req.user.userId === id) {
-    return res.status(403).json({ error: 'Não é permitido se auto-excluir.' });
-  }
-
-  try {
-    await prisma.user.delete({ where: { id } });
-    res.status(204).send();
-  } catch (error) {
-    console.error("Delete User error:", error);
-    res.status(500).json({ error: 'Erro ao deletar usuário.' });
   }
 });
 
