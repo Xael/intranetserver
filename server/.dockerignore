@@ -1,9 +1,0 @@
-# Dependências que serão instaladas dentro do contêiner
-node_modules
-
-# Arquivos de ambiente locais que não devem ir para o build
-.env
-
-# Banco de dados de desenvolvimento do SQLite (muito importante ignorar!)
-prisma/dev.db
-prisma/dev.db-journal
