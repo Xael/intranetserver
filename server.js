@@ -231,7 +231,6 @@ app.delete('/api/licitacoes/:id', authenticateToken, async (req, res) => {
   }
 });
 
-// Rota de Restore para Licitações
 app.post('/api/licitacoes/restore', authenticateToken, async (req, res) => {
   const { licitacoes } = req.body;
   if (!Array.isArray(licitacoes)) {
@@ -241,10 +240,10 @@ app.post('/api/licitacoes/restore', authenticateToken, async (req, res) => {
   try {
     await prisma.$transaction(async (tx) => {
       await tx.licitacaoDetalhada.deleteMany({});
-      // IDs são fornecidos pelo backup, então usamos createMany
+      const dataToCreate = licitacoes.map(({ id, ...rest }) => rest);
       await tx.licitacaoDetalhada.createMany({
-        data: licitacoes,
-        skipDuplicates: true, // Evita erros se houver duplicatas, embora deleteMany deva prevenir isso
+        data: dataToCreate,
+        skipDuplicates: true,
       });
     });
     res.status(200).json({ message: 'Backup das licitações restaurado com sucesso.' });
@@ -339,8 +338,8 @@ app.put('/api/editais/:id', authenticateToken, async (req, res) => {
                 data: {
                     nome,
                     municipioId,
-                    itens: { create: itens.map(({ id, ...item }) => item) },
-                    saidas: { create: saidas.map(({ id, ...saida }) => saida) },
+                    itens: { create: (itens || []).map(({ id, ...item }) => item) },
+                    saidas: { create: (saidas || []).map(({ id, ...saida }) => saida) },
                     empenhos: { create: (empenhos || []).map(({ id, ...emp }) => emp) },
                 },
                 include: { itens: true, saidas: true, empenhos: true },
@@ -354,59 +353,31 @@ app.put('/api/editais/:id', authenticateToken, async (req, res) => {
     }
 });
 
-// Rota de Restore para Materiais
 app.post('/api/materiais/restore', authenticateToken, async (req, res) => {
-  const dataToRestore = req.body; // Espera o array de municípios diretamente
+  const dataToRestore = req.body; 
   if (!Array.isArray(dataToRestore)) {
     return res.status(400).json({ error: 'O corpo da requisição deve conter um array de municípios.' });
   }
 
   try {
     await prisma.$transaction(async (tx) => {
-      // Limpa todas as tabelas relacionadas em ordem. `onDelete: Cascade` ajuda aqui.
-      await tx.municipio.deleteMany({});
-
-      // Recria os municípios e todos os seus dados aninhados.
+      await tx.municipio.deleteMany({}); // onDelete: Cascade cuidará do resto
+      
       for (const mun of dataToRestore) {
         await tx.municipio.create({
           data: {
-            // Se o backup tiver IDs, você pode incluí-los se o campo não for autoincrement
             nome: mun.nome,
             editais: {
               create: (mun.editais || []).map(ed => ({
                 nome: ed.nome,
                 itens: {
-                  create: (ed.itens || []).map(item => ({
-                    descricao: item.descricao,
-                    marca: item.marca,
-                    unidade: item.unidade,
-                    quantidade: item.quantidade,
-                    valorUnitario: item.valorUnitario,
-                    valorTotal: item.valorTotal,
-                  }))
+                  create: (ed.itens || []).map(({ id, ...item }) => item)
                 },
                 saidas: {
-                  create: (ed.saidas || []).map(saida => ({
-                    itemIndex: saida.itemIndex,
-                    descricao: saida.descricao,
-                    marca: saida.marca,
-                    quantidade: saida.quantidade,
-                    valorUnitario: saida.valorUnitario,
-                    valorTotal: saida.valorTotal,
-                    data: saida.data,
-                    notaFiscal: saida.notaFiscal,
-                  }))
+                  create: (ed.saidas || []).map(({ id, ...saida }) => saida)
                 },
                 empenhos: {
-                   create: (ed.empenhos || []).map(emp => ({
-                    dataPedido: emp.dataPedido,
-                    numeroPedido: emp.numeroPedido,
-                    numeroProcesso: emp.numeroProcesso,
-                    empenhoPDF: emp.empenhoPDF || undefined,
-                    notaFiscalPDF: emp.notaFiscalPDF || undefined,
-                    dataNotaFiscal: emp.dataNotaFiscal || undefined,
-                    valorNotaFiscal: emp.valorNotaFiscal || undefined,
-                  }))
+                   create: (ed.empenhos || []).map(({ id, ...emp }) => emp)
                 }
               }))
             }
@@ -525,7 +496,7 @@ app.post('/api/simulacoes', authenticateToken, async (req, res) => {
             data: {
                 ...simulacaoData,
                 itens: {
-                    create: itens.map(({id, ...item}) => item),
+                    create: (itens || []).map(({id, ...item}) => item),
                 },
             },
             include: { itens: true }
