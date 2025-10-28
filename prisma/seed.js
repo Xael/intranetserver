@@ -5,8 +5,8 @@ const bcrypt = require('bcryptjs');
 const prisma = new PrismaClient();
 
 async function main() {
-  const username = 'admin';
-  const password = '123';
+  const username = 'admincrb';
+  const password = 'crb312@!';
   const name = 'Administrador';
 
   // Verifica se o usuário admin já existe
@@ -28,7 +28,7 @@ async function main() {
       name,
     },
   });
-  console.log('Usuário admin criado com sucesso! (admin/123)');
+  console.log('Usuário admin criado com sucesso!');
 }
 
 main()
