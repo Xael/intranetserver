@@ -87,6 +87,95 @@ app.post('/api/auth/login', async (req, res) => {
 });
 
 
+// --- ROTAS DE GERENCIAMENTO DE USUÁRIOS (PROTEGIDAS) ---
+
+// Listar todos os usuários
+app.get('/api/users', authenticateToken, async (req, res) => {
+  try {
+    const users = await prisma.user.findMany({
+      select: { id: true, username: true, name: true, createdAt: true, updatedAt: true },
+      orderBy: { name: 'asc' },
+    });
+    res.json(users);
+  } catch (error) {
+    console.error("Get Users error:", error);
+    res.status(500).json({ error: 'Erro ao buscar usuários.' });
+  }
+});
+
+// Criar um novo usuário
+app.post('/api/users', authenticateToken, async (req, res) => {
+  const { username, password, name } = req.body;
+  if (!username || !password || !name) {
+    return res.status(400).json({ error: 'Nome de usuário, senha e nome completo são obrigatórios.' });
+  }
+  try {
+    const passwordHash = await bcrypt.hash(password, 10);
+    const newUser = await prisma.user.create({
+      data: { username, passwordHash, name },
+      select: { id: true, username: true, name: true, createdAt: true, updatedAt: true },
+    });
+    res.status(201).json(newUser);
+  } catch (error) {
+    if (error.code === 'P2002') { // Prisma unique constraint violation
+      return res.status(409).json({ error: 'Nome de usuário já existe.' });
+    }
+    console.error("Create User error:", error);
+    res.status(500).json({ error: 'Erro ao criar usuário.' });
+  }
+});
+
+// Atualizar um usuário
+app.put('/api/users/:id', authenticateToken, async (req, res) => {
+  const { id } = req.params;
+  const { name, username, password } = req.body;
+
+  if (!name || !username) {
+    return res.status(400).json({ error: 'Nome e nome de usuário são obrigatórios.' });
+  }
+  
+  try {
+    const dataToUpdate = { name, username, passwordHash: undefined };
+    if (password) {
+      dataToUpdate.passwordHash = await bcrypt.hash(password, 10);
+    } else {
+      delete dataToUpdate.passwordHash;
+    }
+    
+    const updatedUser = await prisma.user.update({
+      where: { id },
+      data: dataToUpdate,
+      select: { id: true, username: true, name: true, createdAt: true, updatedAt: true },
+    });
+    res.json(updatedUser);
+  } catch (error) {
+    if (error.code === 'P2002') {
+        return res.status(409).json({ error: 'Nome de usuário já existe.' });
+    }
+    console.error("Update User error:", error);
+    res.status(500).json({ error: 'Erro ao atualizar usuário.' });
+  }
+});
+
+// Deletar um usuário
+app.delete('/api/users/:id', authenticateToken, async (req, res) => {
+  const { id } = req.params;
+  
+  // Medida de segurança: não permitir que o usuário logado se auto-delete
+  if (req.user.userId === id) {
+    return res.status(403).json({ error: 'Não é permitido se auto-excluir.' });
+  }
+
+  try {
+    await prisma.user.delete({ where: { id } });
+    res.status(204).send();
+  } catch (error) {
+    console.error("Delete User error:", error);
+    res.status(500).json({ error: 'Erro ao deletar usuário.' });
+  }
+});
+
+
 // --- ROTAS PROTEGIDAS DA API ---
 // Todas as rotas abaixo exigem um token de autenticação válido
 
@@ -139,6 +228,29 @@ app.delete('/api/licitacoes/:id', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error("Delete Licitacao error:", error);
     res.status(500).json({ error: 'Erro ao deletar licitação.' });
+  }
+});
+
+// Rota de Restore para Licitações
+app.post('/api/licitacoes/restore', authenticateToken, async (req, res) => {
+  const { licitacoes } = req.body;
+  if (!Array.isArray(licitacoes)) {
+    return res.status(400).json({ error: 'O corpo da requisição deve conter um array de "licitacoes".' });
+  }
+
+  try {
+    await prisma.$transaction(async (tx) => {
+      await tx.licitacaoDetalhada.deleteMany({});
+      // IDs são fornecidos pelo backup, então usamos createMany
+      await tx.licitacaoDetalhada.createMany({
+        data: licitacoes,
+        skipDuplicates: true, // Evita erros se houver duplicatas, embora deleteMany deva prevenir isso
+      });
+    });
+    res.status(200).json({ message: 'Backup das licitações restaurado com sucesso.' });
+  } catch (error) {
+    console.error("Restore Licitacoes error:", error);
+    res.status(500).json({ error: 'Erro ao restaurar o backup de licitações.' });
   }
 });
 
@@ -201,8 +313,10 @@ app.get('/api/materiais', authenticateToken, async (req, res) => {
                         saidas: { orderBy: { id: 'asc' } },
                         empenhos: { orderBy: { dataPedido: 'desc' } },
                     },
+                     orderBy: { nome: 'asc' }
                 },
             },
+            orderBy: { nome: 'asc' }
         });
         res.json(data);
     } catch (error) {
@@ -215,14 +329,11 @@ app.put('/api/editais/:id', authenticateToken, async (req, res) => {
     const { id } = req.params;
     const { nome, municipioId, itens, saidas, empenhos } = req.body;
     try {
-        // Usando uma transação para garantir a atomicidade da operação
         const result = await prisma.$transaction(async (tx) => {
-            // 1. Limpa relações existentes
             await tx.estoqueItem.deleteMany({ where: { editalId: id } });
             await tx.saidaItem.deleteMany({ where: { editalId: id } });
             await tx.empenho.deleteMany({ where: { editalId: id } });
             
-            // 2. Atualiza o edital e recria as relações
             const updatedEdital = await tx.edital.update({
                 where: { id },
                 data: {
@@ -242,6 +353,75 @@ app.put('/api/editais/:id', authenticateToken, async (req, res) => {
         res.status(500).json({ error: 'Erro ao atualizar dados do edital.' });
     }
 });
+
+// Rota de Restore para Materiais
+app.post('/api/materiais/restore', authenticateToken, async (req, res) => {
+  const dataToRestore = req.body; // Espera o array de municípios diretamente
+  if (!Array.isArray(dataToRestore)) {
+    return res.status(400).json({ error: 'O corpo da requisição deve conter um array de municípios.' });
+  }
+
+  try {
+    await prisma.$transaction(async (tx) => {
+      // Limpa todas as tabelas relacionadas em ordem. `onDelete: Cascade` ajuda aqui.
+      await tx.municipio.deleteMany({});
+
+      // Recria os municípios e todos os seus dados aninhados.
+      for (const mun of dataToRestore) {
+        await tx.municipio.create({
+          data: {
+            // Se o backup tiver IDs, você pode incluí-los se o campo não for autoincrement
+            nome: mun.nome,
+            editais: {
+              create: (mun.editais || []).map(ed => ({
+                nome: ed.nome,
+                itens: {
+                  create: (ed.itens || []).map(item => ({
+                    descricao: item.descricao,
+                    marca: item.marca,
+                    unidade: item.unidade,
+                    quantidade: item.quantidade,
+                    valorUnitario: item.valorUnitario,
+                    valorTotal: item.valorTotal,
+                  }))
+                },
+                saidas: {
+                  create: (ed.saidas || []).map(saida => ({
+                    itemIndex: saida.itemIndex,
+                    descricao: saida.descricao,
+                    marca: saida.marca,
+                    quantidade: saida.quantidade,
+                    valorUnitario: saida.valorUnitario,
+                    valorTotal: saida.valorTotal,
+                    data: saida.data,
+                    notaFiscal: saida.notaFiscal,
+                  }))
+                },
+                empenhos: {
+                   create: (ed.empenhos || []).map(emp => ({
+                    dataPedido: emp.dataPedido,
+                    numeroPedido: emp.numeroPedido,
+                    numeroProcesso: emp.numeroProcesso,
+                    empenhoPDF: emp.empenhoPDF || undefined,
+                    notaFiscalPDF: emp.notaFiscalPDF || undefined,
+                    dataNotaFiscal: emp.dataNotaFiscal || undefined,
+                    valorNotaFiscal: emp.valorNotaFiscal || undefined,
+                  }))
+                }
+              }))
+            }
+          }
+        });
+      }
+    });
+
+    res.status(200).json({ message: 'Backup de materiais restaurado com sucesso.' });
+  } catch (error) {
+     console.error("Restore Materiais error:", error);
+     res.status(500).json({ error: 'Erro ao restaurar o backup de materiais.' });
+  }
+});
+
 
 app.post('/api/municipios', authenticateToken, async (req, res) => {
   const { nome } = req.body;
