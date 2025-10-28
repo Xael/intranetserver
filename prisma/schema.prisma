@@ -1,0 +1,162 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// 1. Define o provedor do banco de dados e a URL de conexão (do arquivo .env)
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// 2. Define o gerador do Prisma Client
+generator client {
+  provider = "prisma-client-js"
+}
+
+// --- Enums ---
+enum StatusLicitacaoDetalhada {
+  EM_ANDAMENTO
+  VENCIDA
+  ENCERRADA
+  DESCLASSIFICADA
+}
+
+// --- Models (Tabelas) ---
+
+model LicitacaoDetalhada {
+  id               String                   @id @default(cuid())
+  city             String
+  bidNumber        String
+  realizationDate  String
+  placement        String
+  status           StatusLicitacaoDetalhada
+  companyName      String
+  platformLink     String
+  lastUpdated      DateTime                 @updatedAt
+  progressForecast String?
+
+  @@map("licitacoes_detalhadas")
+}
+
+model EventoCalendarioDetalhado {
+  id          String   @id @default(cuid())
+  start       String
+  title       String
+  city        String
+  bid_number  String
+  time        String?
+  location    String?
+  description String?
+
+  @@map("eventos_calendario")
+}
+
+model Municipio {
+  id      String   @id @default(cuid())
+  nome    String   @unique
+  editais Edital[]
+
+  @@map("municipios")
+}
+
+model Edital {
+  id          String        @id @default(cuid())
+  nome        String
+  itens       EstoqueItem[]
+  saidas      SaidaItem[]
+  empenhos    Empenho[]
+  municipio   Municipio @relation(fields: [municipioId], references: [id], onDelete: Cascade)
+  municipioId String
+
+  @@map("editais")
+}
+
+model EstoqueItem {
+  id            String  @id @default(cuid())
+  descricao     String
+  marca         String?
+  unidade       String
+  quantidade    Float
+  valorUnitario Float
+  valorTotal    Float
+  edital        Edital   @relation(fields: [editalId], references: [id], onDelete: Cascade)
+  editalId      String
+
+  @@map("estoque_itens")
+}
+
+model SaidaItem {
+  id            String  @id @default(cuid())
+  itemIndex     Int
+  descricao     String
+  marca         String?
+  quantidade    Float
+  valorUnitario Float
+  valorTotal    Float
+  data          String
+  notaFiscal    String
+  edital        Edital @relation(fields: [editalId], references: [id], onDelete: Cascade)
+  editalId      String
+
+  @@map("saidas_itens")
+}
+
+model Empenho {
+  id              String  @id @default(cuid())
+  dataPedido      String
+  numeroPedido    String
+  numeroProcesso  String
+  dataNotaFiscal  String?
+  valorNotaFiscal Float?
+  empenhoPDF      Json?
+  notaFiscalPDF   Json?
+  edital          Edital   @relation(fields: [editalId], references: [id], onDelete: Cascade)
+  editalId        String
+
+  @@map("empenhos")
+}
+
+model SimulacaoSalva {
+  id        String          @id @default(cuid())
+  data      DateTime        @default(now())
+  municipio String
+  edital    String
+  itens     SimulacaoItem[]
+
+  @@map("simulacoes_salvas")
+}
+
+model SimulacaoItem {
+  id            Int      @id @default(autoincrement())
+  itemIndex     Int
+  descricao     String
+  marca         String?
+  unidade       String
+  quantidade    Float
+  valorUnitario Float
+  valorTotal    Float
+  simulacao     SimulacaoSalva @relation(fields: [simulacaoId], references: [id], onDelete: Cascade)
+  simulacaoId   String
+
+  @@map("simulacoes_itens")
+}
+
+model EPIEntrega {
+  id          String @id @default(cuid())
+  funcionario String
+  item        String
+  quantidade  Int
+  dataEntrega String
+
+  @@map("epi_entregas")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  username     String   @unique
+  passwordHash String
+  name         String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@map("users")
+}
