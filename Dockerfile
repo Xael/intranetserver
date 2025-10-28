@@ -11,7 +11,6 @@ WORKDIR /app
 COPY package*.json ./
 
 # Instala SOMENTE as dependências de produção.
-# 'nodemon' e 'prisma' (CLI) são devDependencies e não precisam ir para produção.
 RUN npm install --production
 
 # Copia o restante do código da aplicação, incluindo o schema do Prisma
