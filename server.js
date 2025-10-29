@@ -397,7 +397,7 @@ app.delete('/api/editais/:id', authenticateToken, async (req, res) => {
 });
 
 
-// --- CONTROLE DE EPI ---
+// --- CONTROLE DE EPI (ENTREGAS) ---
 app.get('/api/epi', authenticateToken, async (req, res) => {
     try {
         const entregas = await prisma.ePIEntrega.findMany({
@@ -454,6 +454,80 @@ app.post('/api/epi/restore', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error("Restore EPI error:", error);
     res.status(500).json({ error: 'Erro ao restaurar o backup de EPI.' });
+  }
+});
+
+
+// --- CONTROLE DE ESTOQUE DE EPI ---
+app.get('/api/epi-estoque', authenticateToken, async (req, res) => {
+    try {
+        const estoque = await prisma.ePIEstoqueItem.findMany({ orderBy: { name: 'asc' } });
+        res.json(estoque);
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao buscar estoque de EPI.' });
+    }
+});
+
+app.post('/api/epi-estoque', authenticateToken, async (req, res) => {
+    const { name, qty } = req.body;
+    try {
+        const existingItem = await prisma.ePIEstoqueItem.findUnique({ where: { name } });
+        if (existingItem) {
+            const updatedItem = await prisma.ePIEstoqueItem.update({
+                where: { name },
+                data: { qty: existingItem.qty + qty },
+            });
+            res.json(updatedItem);
+        } else {
+            const newItem = await prisma.ePIEstoqueItem.create({ data: { name, qty } });
+            res.status(201).json(newItem);
+        }
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao adicionar item ao estoque de EPI.' });
+    }
+});
+
+app.put('/api/epi-estoque/:id', authenticateToken, async (req, res) => {
+    const { id } = req.params;
+    const { qty, manualOut, manualOutQty } = req.body;
+    try {
+        const updatedItem = await prisma.ePIEstoqueItem.update({
+            where: { id },
+            data: { qty, manualOut, manualOutQty },
+        });
+        res.json(updatedItem);
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao atualizar item de estoque de EPI.' });
+    }
+});
+
+app.delete('/api/epi-estoque/:id', authenticateToken, async (req, res) => {
+    try {
+        await prisma.ePIEstoqueItem.delete({ where: { id: req.params.id } });
+        res.status(204).send();
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao remover item do estoque de EPI.' });
+    }
+});
+
+app.post('/api/epi-estoque/restore', authenticateToken, async (req, res) => {
+  const { estoque } = req.body;
+  if (!Array.isArray(estoque)) {
+    return res.status(400).json({ error: 'O corpo da requisição deve conter um array de "estoque".' });
+  }
+  try {
+    await prisma.$transaction(async (tx) => {
+      await tx.ePIEstoqueItem.deleteMany({});
+      if(estoque.length > 0) {
+        await tx.ePIEstoqueItem.createMany({
+          data: estoque.map(({ id, ...rest }) => rest),
+          skipDuplicates: true,
+        });
+      }
+    });
+    res.status(200).json({ message: 'Backup de estoque de EPI restaurado.' });
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao restaurar o backup de estoque de EPI.' });
   }
 });
 
