@@ -161,12 +161,12 @@ model User {
   @@map("users")
 }
 
-// --- NEW MODELS FOR "COTAÇÕES" ---
+// --- MODELS FOR "COTAÇÕES" ---
 
 model Cotacao {
   id    String        @id @default(cuid())
   local String
-  data  String // Formato YYYY-MM-DD
+  data  String // YYYY-MM-DD
   itens CotacaoItem[]
 
   @@map("cotacoes")
@@ -187,7 +187,7 @@ model CotacaoItem {
 }
 
 model ValorReferencia {
-  id      String @id // Será o nome do produto normalizado (lowercase)
+  id      String @id // Normalized product name
   produto String
   valor   Float
 
@@ -213,10 +213,21 @@ model SimulacaoCotacaoItem {
   marca              String?
   origemCotacaoId    String
   origemCotacaoLocal String
-  origemCotacaoData  String // Formato YYYY-MM-DD
+  origemCotacaoData  String // YYYY-MM-DD
 
   simulacao   SimulacaoCotacaoSalva @relation(fields: [simulacaoId], references: [id], onDelete: Cascade)
   simulacaoId String
 
   @@map("simulacoes_cotacoes_itens")
+}
+
+// --- MODEL FOR "CALCULADORA" ---
+
+model CalculadoraSalva {
+  id     String   @id @default(cuid())
+  nome   String
+  data   DateTime @default(now())
+  custos Json // Campo JSON para armazenar a estrutura flexível de custos
+
+  @@map("calculadora_salva")
 }
