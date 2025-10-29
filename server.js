@@ -206,26 +206,36 @@ app.delete('/api/licitacoes/:id', authenticateToken, async (req, res) => {
   }
 });
 
+// ROTA CORRIGIDA
 app.post('/api/restore-bids-backup', authenticateToken, async (req, res) => {
-  const { licitacoes } = req.body;
-  if (!Array.isArray(licitacoes)) {
-    return res.status(400).json({ error: 'O corpo da requisição deve conter um array de "licitacoes".' });
-  }
+  const { licitacoes } = req.body;
+  if (!Array.isArray(licitacoes)) {
+    return res.status(400).json({ error: 'O corpo da requisição deve conter um array de "licitacoes".' });
+  }
 
-  try {
-    await prisma.$transaction(async (tx) => {
-      await tx.licitacaoDetalhada.deleteMany({});
-      const dataToCreate = licitacoes.map(({ id, ...rest }) => rest);
-      await tx.licitacaoDetalhada.createMany({
-        data: dataToCreate,
-        skipDuplicates: true,
+  try {
+    await prisma.$transaction(async (tx) => {
+      await tx.licitacaoDetalhada.deleteMany({});
+      
+      // LINHA CORRIGIDA:
+      const dataToCreate = licitacoes.map(({ id, ...rest }) => {
+        // Mapeia o status de string para enum
+        if (rest.status) {
+          rest.status = mapStatusToEnum(rest.status);
+        }
+        return rest;
       });
-    });
-    res.status(200).json({ message: 'Backup das licitações restaurado com sucesso.' });
-  } catch (error) {
-    console.error("Restore Licitacoes error:", error);
-    res.status(500).json({ error: 'Erro ao restaurar o backup de licitações.' });
-  }
+
+      await tx.licitacaoDetalhada.createMany({
+        data: dataToCreate,
+        skipDuplicates: true,
+      });
+    });
+    res.status(200).json({ message: 'Backup das licitações restaurado com sucesso.' });
+  } catch (error) {
+    console.error("Restore Licitacoes error:", error);
+    res.status(500).json({ error: 'Erro ao restaurar o backup de licitações.' });
+  }
 });
 
 
