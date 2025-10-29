@@ -11,6 +11,19 @@ const PORT = process.env.PORT || 3001;
 // É altamente recomendável mover esta chave para uma variável de ambiente (.env)
 const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-key-that-is-long-and-secure';
 
+// --- Helper for status enum mapping ---
+const statusMap = {
+  'Em Andamento': 'EM_ANDAMENTO',
+  'Vencida': 'VENCIDA',
+  'Encerrada': 'ENCERRADA',
+  'Desclassificada': 'DESCLASSIFICADA',
+};
+
+const mapStatusToEnum = (statusString) => {
+  return statusMap[statusString] || statusString;
+};
+
+
 // Middleware
 app.use(cors()); // Habilita Cross-Origin Resource Sharing
 app.use(express.json({ limit: '10mb' })); // Aumenta o limite para upload de arquivos (base64)
@@ -155,6 +168,9 @@ app.get('/api/licitacoes', authenticateToken, async (req, res) => {
 app.post('/api/licitacoes', authenticateToken, async (req, res) => {
   try {
     const { id, ...data } = req.body;
+    if (data.status) {
+      data.status = mapStatusToEnum(data.status);
+    }
     const newLicitacao = await prisma.licitacaoDetalhada.create({ data });
     res.status(201).json(newLicitacao);
   } catch (error) {
@@ -166,6 +182,9 @@ app.post('/api/licitacoes', authenticateToken, async (req, res) => {
 app.put('/api/licitacoes/:id', authenticateToken, async (req, res) => {
   try {
     const { id, ...data } = req.body;
+    if (data.status) {
+      data.status = mapStatusToEnum(data.status);
+    }
     const updatedLicitacao = await prisma.licitacaoDetalhada.update({
       where: { id: req.params.id },
       data,
@@ -196,7 +215,10 @@ app.post('/api/restore-bids-backup', authenticateToken, async (req, res) => {
   try {
     await prisma.$transaction(async (tx) => {
       await tx.licitacaoDetalhada.deleteMany({});
-      const dataToCreate = licitacoes.map(({ id, ...rest }) => rest);
+      const dataToCreate = licitacoes.map(({ id, ...rest }) => ({
+        ...rest,
+        status: mapStatusToEnum(rest.status),
+      }));
       await tx.licitacaoDetalhada.createMany({
         data: dataToCreate,
         skipDuplicates: true,
