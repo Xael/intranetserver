@@ -256,6 +256,26 @@ app.delete('/api/events/:id', authenticateToken, async (req, res) => {
     }
 });
 
+app.post('/api/events/restore', authenticateToken, async (req, res) => {
+  const { events } = req.body;
+  if (!Array.isArray(events)) {
+    return res.status(400).json({ error: 'O corpo da requisição deve ser um objeto { events: [] }.' });
+  }
+  try {
+    await prisma.$transaction(async (tx) => {
+      await tx.eventoCalendarioDetalhado.deleteMany({});
+      const dataToCreate = events.map(({ id, ...rest }) => rest);
+      if (dataToCreate.length > 0) {
+        await tx.eventoCalendarioDetalhado.createMany({ data: dataToCreate });
+      }
+    });
+    res.status(200).json({ message: 'Backup do calendário restaurado com sucesso.' });
+  } catch (error) {
+    console.error("Restore Events error:", error);
+    res.status(500).json({ error: 'Erro ao restaurar o backup do calendário.' });
+  }
+});
+
 
 // --- CONTROLE DE MATERIAIS, EMPENHOS, ETC ---
 app.get('/api/materiais', authenticateToken, async (req, res) => {
