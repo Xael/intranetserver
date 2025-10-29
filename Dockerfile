@@ -1,9 +1,6 @@
 # Estágio 1: Base com Node.js
-FROM node:20-alpine AS base
-
-# *** ADICIONE ESTA LINHA ***
-# Instala a dependência de compatibilidade do OpenSSL 1.1 que o Prisma precisa
-RUN apk add --no-cache openssl1.1-compat
+# Trocamos 'alpine' por 'bullseye-slim' para melhor compatibilidade de bibliotecas
+FROM node:20-bullseye-slim AS base
 
 # Define o diretório de trabalho dentro do contêiner
 WORKDIR /app
@@ -19,6 +16,7 @@ COPY . .
 
 # *** PASSO CRUCIAL PARA O PRISMA ***
 # Gera o Prisma Client com base no schema.
+# Ele vai baixar o 'linux-gnu' engine automaticamente, que é compatível.
 RUN npx prisma generate
 
 # Expõe a porta que o servidor vai usar
