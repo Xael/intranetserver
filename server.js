@@ -71,11 +71,80 @@ app.get('/api/health', (req, res) => {
   res.status(200).json({ status: 'ok', message: 'Server is running' });
 });
 
+// --- GERENCIAMENTO DE USUÁRIOS (CONFIGURAÇÕES) ---
+app.get('/api/users', authenticateToken, async (req, res) => {
+    try {
+        const users = await prisma.user.findMany({
+            select: { id: true, name: true, username: true, createdAt: true },
+            orderBy: { name: 'asc' },
+        });
+        res.json(users);
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao buscar usuários.' });
+    }
+});
+
+app.post('/api/users', authenticateToken, async (req, res) => {
+    const { name, username, password } = req.body;
+    if (!name || !username || !password) {
+        return res.status(400).json({ error: 'Nome, nome de usuário e senha são obrigatórios.' });
+    }
+    try {
+        const passwordHash = await bcrypt.hash(password, 10);
+        const newUser = await prisma.user.create({
+            data: { name, username, passwordHash },
+            select: { id: true, name: true, username: true, createdAt: true },
+        });
+        res.status(201).json(newUser);
+    } catch (error) {
+        if (error.code === 'P2002') { // Unique constraint failed
+            return res.status(409).json({ error: 'Nome de usuário já existe.' });
+        }
+        res.status(500).json({ error: 'Erro ao criar usuário.' });
+    }
+});
+
+app.put('/api/users/:id', authenticateToken, async (req, res) => {
+    const { id } = req.params;
+    const { name, username, password } = req.body;
+    
+    let dataToUpdate = { name, username };
+    if (password) {
+        dataToUpdate.passwordHash = await bcrypt.hash(password, 10);
+    }
+
+    try {
+        const updatedUser = await prisma.user.update({
+            where: { id },
+            data: dataToUpdate,
+            select: { id: true, name: true, username: true, createdAt: true },
+        });
+        res.json(updatedUser);
+    } catch (error) {
+        if (error.code === 'P2002') {
+            return res.status(409).json({ error: 'Nome de usuário já existe.' });
+        }
+        res.status(500).json({ error: 'Erro ao atualizar usuário.' });
+    }
+});
+
+app.delete('/api/users/:id', authenticateToken, async (req, res) => {
+    const { id } = req.params;
+    try {
+        await prisma.user.delete({ where: { id } });
+        res.status(204).send();
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao excluir usuário.' });
+    }
+});
+
 
 // --- LICITAÇÕES (STATUS) ---
 app.get('/api/licitacoes', authenticateToken, async (req, res) => {
   try {
-    const licitacoes = await prisma.licitacaoDetalhada.findMany();
+    const licitacoes = await prisma.licitacaoDetalhada.findMany({
+      orderBy: { lastUpdated: 'desc' }
+    });
     res.json(licitacoes);
   } catch (error) {
     console.error("Get Licitacoes error:", error);
@@ -118,7 +187,7 @@ app.delete('/api/licitacoes/:id', authenticateToken, async (req, res) => {
   }
 });
 
-app.post('/api/licitacoes-restore', authenticateToken, async (req, res) => {
+app.post('/api/restore-bids-backup', authenticateToken, async (req, res) => {
   const { licitacoes } = req.body;
   if (!Array.isArray(licitacoes)) {
     return res.status(400).json({ error: 'O corpo da requisição deve conter um array de "licitacoes".' });
@@ -362,8 +431,34 @@ app.delete('/api/epi/:id', authenticateToken, async (req, res) => {
     }
 });
 
+app.post('/api/epi/restore', authenticateToken, async (req, res) => {
+  const { entregas } = req.body;
+  if (!Array.isArray(entregas)) {
+    return res.status(400).json({ error: 'O corpo da requisição deve conter um array de "entregas".' });
+  }
 
-// --- SIMULAÇÕES SALVAS ---
+  try {
+    await prisma.$transaction(async (tx) => {
+      await tx.ePIEntrega.deleteMany({});
+      
+      const dataToCreate = entregas.map(({ id, ...rest }) => rest);
+
+      if (dataToCreate.length > 0) {
+        await tx.ePIEntrega.createMany({
+          data: dataToCreate,
+          skipDuplicates: true,
+        });
+      }
+    });
+    res.status(200).json({ message: 'Backup de EPI restaurado com sucesso.' });
+  } catch (error) {
+    console.error("Restore EPI error:", error);
+    res.status(500).json({ error: 'Erro ao restaurar o backup de EPI.' });
+  }
+});
+
+
+// --- SIMULAÇÕES SALVAS (MATERIAIS) ---
 app.get('/api/simulacoes', authenticateToken, async (req, res) => {
     try {
         const simulacoes = await prisma.simulacaoSalva.findMany({
@@ -402,6 +497,170 @@ app.delete('/api/simulacoes/:id', authenticateToken, async (req, res) => {
     } catch (error) {
         console.error("Delete Simulacao error:", error);
         res.status(500).json({ error: 'Erro ao deletar simulação.' });
+    }
+});
+
+// --- COTAÇÕES ---
+app.get('/api/cotacoes', authenticateToken, async (req, res) => {
+    try {
+        const cotacoes = await prisma.cotacao.findMany({ include: { itens: true }, orderBy: { data: 'desc' } });
+        res.json(cotacoes);
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao buscar cotações.' });
+    }
+});
+
+app.post('/api/cotacoes/import', authenticateToken, async (req, res) => {
+    const { cotacoes } = req.body;
+    if (!Array.isArray(cotacoes)) return res.status(400).json({ error: "Formato inválido." });
+    try {
+        const created = await prisma.$transaction(
+            cotacoes.map(c => prisma.cotacao.create({
+                data: {
+                    local: c.local,
+                    data: c.data,
+                    itens: {
+                        create: c.itens.map(({ id, ...item }) => item)
+                    }
+                }
+            }))
+        );
+        res.status(201).json(created);
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao importar cotações.' });
+    }
+});
+
+app.delete('/api/cotacoes/:id', authenticateToken, async (req, res) => {
+    try {
+        await prisma.cotacao.delete({ where: { id: req.params.id } });
+        res.status(204).send();
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao deletar cotação.' });
+    }
+});
+
+// --- VALORES DE REFERÊNCIA ---
+app.get('/api/valores-referencia', authenticateToken, async (req, res) => {
+    try {
+        const valores = await prisma.valorReferencia.findMany();
+        res.json(valores);
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao buscar valores de referência.' });
+    }
+});
+
+app.post('/api/valores-referencia', authenticateToken, async (req, res) => {
+    const { id, produto, valor } = req.body;
+    try {
+        const upsertedValor = await prisma.valorReferencia.upsert({
+            where: { id },
+            update: { produto, valor },
+            create: { id, produto, valor },
+        });
+        res.status(201).json(upsertedValor);
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao salvar valor de referência.' });
+    }
+});
+
+app.delete('/api/valores-referencia/:id', authenticateToken, async (req, res) => {
+    try {
+        await prisma.valorReferencia.delete({ where: { id: req.params.id } });
+        res.status(204).send();
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao deletar valor de referência.' });
+    }
+});
+
+// --- SIMULAÇÕES DE COTAÇÃO ---
+app.get('/api/simulacoes-cotacoes', authenticateToken, async (req, res) => {
+    try {
+        const simulacoes = await prisma.simulacaoCotacaoSalva.findMany({ include: { itens: true } });
+        res.json(simulacoes);
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao buscar simulações de cotação.' });
+    }
+});
+
+app.post('/api/simulacoes-cotacoes', authenticateToken, async (req, res) => {
+    const { nome, data, itens } = req.body;
+    try {
+        const newSimulacao = await prisma.simulacaoCotacaoSalva.create({
+            data: {
+                nome,
+                data,
+                itens: {
+                    create: (itens || []).map(item => ({
+                        produto: item.produto,
+                        unidade: item.unidade,
+                        quantidade: item.quantidade,
+                        valorUnitario: item.valorUnitario,
+                        valorTotal: item.valorTotal,
+                        marca: item.marca,
+                        origemCotacaoId: item.cotacaoOrigem.id,
+                        origemCotacaoLocal: item.cotacaoOrigem.local,
+                        origemCotacaoData: item.cotacaoOrigem.data,
+                    }))
+                }
+            },
+            include: { itens: true }
+        });
+        res.status(201).json(newSimulacao);
+    } catch (error) {
+        console.error(error)
+        res.status(500).json({ error: 'Erro ao salvar simulação de cotação.' });
+    }
+});
+
+app.delete('/api/simulacoes-cotacoes/:id', authenticateToken, async (req, res) => {
+    try {
+        await prisma.simulacaoCotacaoSalva.delete({ where: { id: req.params.id } });
+        res.status(204).send();
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao deletar simulação de cotação.' });
+    }
+});
+
+// --- CALCULADORA ---
+app.get('/api/calculadora', authenticateToken, async (req, res) => {
+    try {
+        const calculos = await prisma.calculadoraSalva.findMany({
+            orderBy: { data: 'desc' }
+        });
+        res.json(calculos);
+    } catch (error) {
+        console.error("Get Calculadora error:", error);
+        res.status(500).json({ error: 'Erro ao buscar cálculos salvos.' });
+    }
+});
+
+app.post('/api/calculadora', authenticateToken, async (req, res) => {
+    const { nome, custos } = req.body;
+    if (!nome || !custos) {
+        return res.status(400).json({ error: "Nome e objeto de custos são obrigatórios."});
+    }
+    try {
+        const novoCalculo = await prisma.calculadoraSalva.create({
+            data: {
+                nome,
+                custos
+            }
+        });
+        res.status(201).json(novoCalculo);
+    } catch (error) {
+        console.error("Create Calculadora error:", error);
+        res.status(500).json({ error: 'Erro ao salvar cálculo.' });
+    }
+});
+
+app.delete('/api/calculadora/:id', authenticateToken, async (req, res) => {
+    try {
+        await prisma.calculadoraSalva.delete({ where: { id: req.params.id } });
+        res.status(204).send();
+    } catch (error) {
+        console.error("Delete Calculadora error:", error);
+        res.status(500).json({ error: 'Erro ao deletar cálculo.' });
     }
 });
 
