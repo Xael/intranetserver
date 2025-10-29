@@ -1,13 +1,14 @@
 # Estágio 1: Base com Node.js
-# Usamos a imagem oficial do Node.js 20 na versão 'alpine' (super leve)
 FROM node:20-alpine AS base
+
+# *** ADICIONE ESTA LINHA ***
+# Instala a dependência de compatibilidade do OpenSSL 1.1 que o Prisma precisa
+RUN apk add --no-cache openssl1.1-compat
 
 # Define o diretório de trabalho dentro do contêiner
 WORKDIR /app
 
 # Copia os arquivos de definição de dependências
-# Isso aproveita o cache do Docker. Se esses arquivos não mudarem,
-# o 'npm install' não precisa rodar de novo.
 COPY package*.json ./
 
 # Instala SOMENTE as dependências de produção.
@@ -18,7 +19,6 @@ COPY . .
 
 # *** PASSO CRUCIAL PARA O PRISMA ***
 # Gera o Prisma Client com base no schema.
-# Isso é necessário para que a aplicação consiga se comunicar com o banco de dados.
 RUN npx prisma generate
 
 # Expõe a porta que o servidor vai usar
