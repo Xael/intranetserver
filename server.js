@@ -118,7 +118,7 @@ app.delete('/api/licitacoes/:id', authenticateToken, async (req, res) => {
   }
 });
 
-app.post('/api/licitacoes/restore', authenticateToken, async (req, res) => {
+app.post('/api/licitacoes-restore', authenticateToken, async (req, res) => {
   const { licitacoes } = req.body;
   if (!Array.isArray(licitacoes)) {
     return res.status(400).json({ error: 'O corpo da requisição deve conter um array de "licitacoes".' });
