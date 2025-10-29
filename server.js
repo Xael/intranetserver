@@ -215,10 +215,7 @@ app.post('/api/restore-bids-backup', authenticateToken, async (req, res) => {
   try {
     await prisma.$transaction(async (tx) => {
       await tx.licitacaoDetalhada.deleteMany({});
-      const dataToCreate = licitacoes.map(({ id, ...rest }) => ({
-        ...rest,
-        status: mapStatusToEnum(rest.status),
-      }));
+      const dataToCreate = licitacoes.map(({ id, ...rest }) => rest);
       await tx.licitacaoDetalhada.createMany({
         data: dataToCreate,
         skipDuplicates: true,
