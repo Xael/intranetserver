@@ -140,6 +140,8 @@ model SimulacaoItem {
   @@map("simulacoes_itens")
 }
 
+// --- EPI MODELS ---
+
 model EPIEntrega {
   id          String @id @default(cuid())
   funcionario String
@@ -149,6 +151,18 @@ model EPIEntrega {
 
   @@map("epi_entregas")
 }
+
+model EPIEstoqueItem {
+  id           String  @id @default(cuid())
+  name         String  @unique
+  qty          Int     @default(0)
+  manualOut    Boolean @default(false)
+  manualOutQty Int     @default(0)
+
+  @@map("epi_estoque_itens")
+}
+
+// --- USER MODEL ---
 
 model User {
   id           String   @id @default(cuid())
@@ -161,7 +175,7 @@ model User {
   @@map("users")
 }
 
-// --- MODELS FOR "COTAÇÕES" ---
+// --- COTAÇÕES MODELS ---
 
 model Cotacao {
   id    String        @id @default(cuid())
@@ -204,7 +218,7 @@ model SimulacaoCotacaoSalva {
 }
 
 model SimulacaoCotacaoItem {
-  id                 Int    @id @default(autoincrement())
+  id                 Int                   @id @default(autoincrement())
   produto            String
   unidade            String
   quantidade         Float
@@ -214,20 +228,19 @@ model SimulacaoCotacaoItem {
   origemCotacaoId    String
   origemCotacaoLocal String
   origemCotacaoData  String // YYYY-MM-DD
-
-  simulacao   SimulacaoCotacaoSalva @relation(fields: [simulacaoId], references: [id], onDelete: Cascade)
-  simulacaoId String
+  simulacao          SimulacaoCotacaoSalva @relation(fields: [simulacaoId], references: [id], onDelete: Cascade)
+  simulacaoId        String
 
   @@map("simulacoes_cotacoes_itens")
 }
 
-// --- MODEL FOR "CALCULADORA" ---
+// --- CALCULADORA MODEL ---
 
 model CalculadoraSalva {
   id     String   @id @default(cuid())
   nome   String
   data   DateTime @default(now())
-  custos Json // Campo JSON para armazenar a estrutura flexível de custos
+  custos Json
 
   @@map("calculadora_salva")
 }
