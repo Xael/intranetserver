@@ -160,3 +160,63 @@ model User {
 
   @@map("users")
 }
+
+// --- NEW MODELS FOR "COTAÇÕES" ---
+
+model Cotacao {
+  id    String        @id @default(cuid())
+  local String
+  data  String // Formato YYYY-MM-DD
+  itens CotacaoItem[]
+
+  @@map("cotacoes")
+}
+
+model CotacaoItem {
+  id            String  @id @default(cuid())
+  produto       String
+  unidade       String
+  quantidade    Float
+  valorUnitario Float
+  valorTotal    Float
+  marca         String?
+  cotacao       Cotacao @relation(fields: [cotacaoId], references: [id], onDelete: Cascade)
+  cotacaoId     String
+
+  @@map("cotacao_itens")
+}
+
+model ValorReferencia {
+  id      String @id // Será o nome do produto normalizado (lowercase)
+  produto String
+  valor   Float
+
+  @@map("valores_referencia")
+}
+
+model SimulacaoCotacaoSalva {
+  id    String                   @id @default(cuid())
+  nome  String
+  data  DateTime                 @default(now())
+  itens SimulacaoCotacaoItem[]
+
+  @@map("simulacoes_cotacoes_salvas")
+}
+
+model SimulacaoCotacaoItem {
+  id                 Int    @id @default(autoincrement())
+  produto            String
+  unidade            String
+  quantidade         Float
+  valorUnitario      Float
+  valorTotal         Float
+  marca              String?
+  origemCotacaoId    String
+  origemCotacaoLocal String
+  origemCotacaoData  String // Formato YYYY-MM-DD
+
+  simulacao   SimulacaoCotacaoSalva @relation(fields: [simulacaoId], references: [id], onDelete: Cascade)
+  simulacaoId String
+
+  @@map("simulacoes_cotacoes_itens")
+}
