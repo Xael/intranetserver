@@ -26,6 +26,7 @@ async function main() {
       username,
       passwordHash,
       name,
+      role: 'ADMIN',
     },
   });
   console.log('Usuário admin criado com sucesso!');
