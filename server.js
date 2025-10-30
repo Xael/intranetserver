@@ -288,7 +288,7 @@ app.post('/api/events/restore', authenticateToken, async (req, res) => {
   }
 });
 
-// --- CONTROLE DE MATERIAIS, EMPENHOS, ETC ---
+// --- CONTROLE DE MATERIAIS (principal) ---
 app.get('/api/materiais', authenticateToken, async (req, res) => {
   try {
     const data = await prisma.municipio.findMany({
@@ -311,219 +311,189 @@ app.get('/api/materiais', authenticateToken, async (req, res) => {
   }
 });
 
-// NOVO: GET único de edital (frontend às vezes tenta buscar)
-app.get('/api/editais/:id', authenticateToken, async (req, res) => {
+// --- ROTA ANTIGA (full replace) — continua existindo para compatibilidade ---
+app.put('/api/editais/:id', authenticateToken, async (req, res) => {
   const { id } = req.params;
+  const { nome, itens, saidas, empenhos } = req.body;
   try {
-    const edital = await prisma.edital.findUnique({
+    const result = await prisma.$transaction(async (tx) => {
+      await tx.estoqueItem.deleteMany({ where: { editalId: id } });
+      await tx.saidaItem.deleteMany({ where: { editalId: id } });
+      await tx.empenho.deleteMany({ where: { editalId: id } });
+
+      const updatedEdital = await tx.edital.update({
+        where: { id },
+        data: {
+          nome,
+          itens: { create: (itens || []).map(({ id, ...item }) => item) },
+          saidas: { create: (saidas || []).map(({ id, ...saida }) => saida) },
+          empenhos: { create: (empenhos || []).map(({ id, ...emp }) => emp) },
+        },
+        include: { itens: true, saidas: true, empenhos: true },
+      });
+      return updatedEdital;
+    });
+    res.json(result);
+  } catch (error) {
+    console.error("Update Edital error:", error);
+    res.status(500).json({ error: 'Erro ao atualizar dados do edital.' });
+  }
+});
+
+// 🔴 🔴 🔴 NOVAS ROTAS INCREMENTAIS (itens / saídas / empenhos) 🔴 🔴 🔴
+
+// 1) Atualizar SOMENTE itens do edital
+app.put('/api/editais/:id/itens', authenticateToken, async (req, res) => {
+  const { id } = req.params;
+  const { itens } = req.body;
+
+  if (!Array.isArray(itens)) {
+    return res.status(400).json({ error: 'Corpo inválido: esperado { itens: [...] }' });
+  }
+
+  try {
+    const itensParaCriar = (itens || []).map((it, idx) => {
+      const quantidade = Number(it.quantidade) || 0;
+      const valorUnitario = Number(it.valorUnitario) || 0;
+      const valorTotal = Number(it.valorTotal) || (quantidade * valorUnitario);
+
+      return {
+        descricao: it.descricao || `Item ${idx + 1}`,
+        marca: it.marca || null,
+        unidade: it.unidade || 'un',
+        quantidade,
+        valorUnitario,
+        valorTotal,
+        editalId: id,
+      };
+    });
+
+    await prisma.$transaction(async (tx) => {
+      // apaga só os itens desse edital
+      await tx.estoqueItem.deleteMany({ where: { editalId: id } });
+      // recria
+      if (itensParaCriar.length > 0) {
+        await tx.estoqueItem.createMany({
+          data: itensParaCriar,
+        });
+      }
+    });
+
+    const editalAtualizado = await prisma.edital.findUnique({
       where: { id },
       include: {
         itens: true,
         saidas: true,
         empenhos: true,
-        municipio: true,
-      }
+      },
     });
-    if (!edital) {
-      return res.status(404).json({ error: 'Edital não encontrado.' });
-    }
-    res.json(edital);
+
+    res.json(editalAtualizado);
   } catch (error) {
-    console.error("Get Edital error:", error);
-    res.status(500).json({ error: 'Erro ao buscar edital.' });
+    console.error('Update edital itens error:', error);
+    res.status(500).json({ error: 'Erro ao atualizar itens do edital.' });
   }
 });
 
-/**
- * PUT /api/editais/:id
- * AGORA É INCREMENTAL:
- * - Atualiza só o que mudou
- * - Cria o que é novo (sem id)
- * - Remove só o que foi apagado no frontend
- * - NÃO dá mais drop geral nos itens/saídas/empenhos
- */
-app.put('/api/editais/:id', authenticateToken, async (req, res) => {
+// 2) Atualizar SOMENTE saídas do edital
+app.put('/api/editais/:id/saidas', authenticateToken, async (req, res) => {
   const { id } = req.params;
-  const { nome, itens = [], saidas = [], empenhos = [] } = req.body;
+  const { saidas } = req.body;
+
+  if (!Array.isArray(saidas)) {
+    return res.status(400).json({ error: 'Corpo inválido: esperado { saidas: [...] }' });
+  }
 
   try {
-    const result = await prisma.$transaction(async (tx) => {
-      // 1. Buscar o edital atual com tudo
-      const existing = await tx.edital.findUnique({
-        where: { id },
-        include: {
-          itens: true,
-          saidas: true,
-          empenhos: true,
-        },
-      });
-
-      if (!existing) {
-        throw new Error('Edital não encontrado.');
-      }
-
-      // ---------- ITENS ----------
-      const existingItensById = new Map(
-        (existing.itens || []).map((i) => [i.id, i])
-      );
-      const incomingItemIds = new Set(
-        itens.filter((it) => it.id).map((it) => it.id)
-      );
-
-      // Itens a deletar (existem no banco mas não vieram do frontend)
-      const itensToDelete = (existing.itens || [])
-        .filter((it) => !incomingItemIds.has(it.id))
-        .map((it) => it.id);
-
-      if (itensToDelete.length > 0) {
-        await tx.estoqueItem.deleteMany({
-          where: { id: { in: itensToDelete } },
-        });
-      }
-
-      // Itens a criar/atualizar
-      for (const it of itens) {
-        if (it.id && existingItensById.has(it.id)) {
-          // update
-          const { id: _ignore, ...data } = it;
-          await tx.estoqueItem.update({
-            where: { id: it.id },
-            data: {
-              descricao: data.descricao,
-              marca: data.marca || '',
-              unidade: data.unidade,
-              quantidade: data.quantidade,
-              valorUnitario: data.valorUnitario,
-              valorTotal: data.valorTotal,
-            },
-          });
-        } else {
-          // create
-          const { id: _ignore, ...data } = it;
-          await tx.estoqueItem.create({
-            data: {
-              ...data,
-              marca: data.marca || '',
-              editalId: existing.id,
-            },
-          });
-        }
-      }
-
-      // ---------- SAÍDAS ----------
-      const existingSaidasById = new Map(
-        (existing.saidas || []).map((s) => [s.id, s])
-      );
-      const incomingSaidasIds = new Set(
-        saidas.filter((s) => s.id).map((s) => s.id)
-      );
-
-      const saidasToDelete = (existing.saidas || [])
-        .filter((s) => !incomingSaidasIds.has(s.id))
-        .map((s) => s.id);
-
-      if (saidasToDelete.length > 0) {
-        await tx.saidaItem.deleteMany({
-          where: { id: { in: saidasToDelete } },
-        });
-      }
-
-      for (const s of saidas) {
-        if (s.id && existingSaidasById.has(s.id)) {
-          const { id: _ignore, ...data } = s;
-          await tx.saidaItem.update({
-            where: { id: s.id },
-            data: {
-              itemIndex: data.itemIndex,
-              descricao: data.descricao,
-              marca: data.marca || '',
-              quantidade: data.quantidade,
-              valorUnitario: data.valorUnitario,
-              valorTotal: data.valorTotal,
-              data: data.data,
-              notaFiscal: data.notaFiscal,
-            },
-          });
-        } else {
-          const { id: _ignore, ...data } = s;
-          await tx.saidaItem.create({
-            data: {
-              ...data,
-              marca: data.marca || '',
-              editalId: existing.id,
-            },
-          });
-        }
-      }
-
-      // ---------- EMPENHOS ----------
-      const existingEmpById = new Map(
-        (existing.empenhos || []).map((e) => [e.id, e])
-      );
-      const incomingEmpIds = new Set(
-        empenhos.filter((e) => e.id).map((e) => e.id)
-      );
-
-      const empenhosToDelete = (existing.empenhos || [])
-        .filter((e) => !incomingEmpIds.has(e.id))
-        .map((e) => e.id);
-
-      if (empenhosToDelete.length > 0) {
-        await tx.empenho.deleteMany({
-          where: { id: { in: empenhosToDelete } },
-        });
-      }
-
-      for (const e of empenhos) {
-        if (e.id && existingEmpById.has(e.id)) {
-          const { id: _ignore, ...data } = e;
-          await tx.empenho.update({
-            where: { id: e.id },
-            data: {
-              dataPedido: data.dataPedido,
-              numeroPedido: data.numeroPedido,
-              numeroProcesso: data.numeroProcesso,
-              dataNotaFiscal: data.dataNotaFiscal,
-              valorNotaFiscal: data.valorNotaFiscal,
-              empenhoPDF: data.empenhoPDF,
-              notaFiscalPDF: data.notaFiscalPDF,
-            },
-          });
-        } else {
-          const { id: _ignore, ...data } = e;
-          await tx.empenho.create({
-            data: {
-              ...data,
-              editalId: existing.id,
-            },
-          });
-        }
-      }
-
-      // Por fim, atualizar o nome do edital se mudou
-      const updatedEdital = await tx.edital.update({
-        where: { id: existing.id },
-        data: {
-          nome: nome ?? existing.nome,
-        },
-        include: {
-          itens: true,
-          saidas: true,
-          empenhos: true,
-        },
-      });
-
-      return updatedEdital;
+    const saidasParaCriar = (saidas || []).map((s, idx) => {
+      const quantidade = Number(s.quantidade) || 0;
+      const valorUnitario = Number(s.valorUnitario) || 0;
+      const valorTotal = Number(s.valorTotal) || (quantidade * valorUnitario);
+      return {
+        itemIndex: typeof s.itemIndex === 'number' ? s.itemIndex : Number(s.itemIndex) || 0,
+        descricao: s.descricao || `Saída ${idx + 1}`,
+        marca: s.marca || null,
+        quantidade,
+        valorUnitario,
+        valorTotal,
+        data: s.data || '',
+        notaFiscal: s.notaFiscal || '',
+        editalId: id,
+      };
     });
 
-    res.json(result);
+    await prisma.$transaction(async (tx) => {
+      await tx.saidaItem.deleteMany({ where: { editalId: id } });
+      if (saidasParaCriar.length > 0) {
+        await tx.saidaItem.createMany({
+          data: saidasParaCriar,
+        });
+      }
+    });
+
+    const editalAtualizado = await prisma.edital.findUnique({
+      where: { id },
+      include: {
+        itens: true,
+        saidas: true,
+        empenhos: true,
+      },
+    });
+
+    res.json(editalAtualizado);
   } catch (error) {
-    console.error("Update Edital (incremental) error:", error);
-    res.status(500).json({ error: 'Erro ao atualizar dados do edital.' });
+    console.error('Update edital saidas error:', error);
+    res.status(500).json({ error: 'Erro ao atualizar saídas do edital.' });
   }
 });
 
-// RESTORE (destrutivo) - mantido
+// 3) Atualizar SOMENTE empenhos do edital
+app.put('/api/editais/:id/empenhos', authenticateToken, async (req, res) => {
+  const { id } = req.params;
+  const { empenhos } = req.body;
+
+  if (!Array.isArray(empenhos)) {
+    return res.status(400).json({ error: 'Corpo inválido: esperado { empenhos: [...] }' });
+  }
+
+  try {
+    const empenhosParaCriar = (empenhos || []).map((e, idx) => ({
+      dataPedido: e.dataPedido || '',
+      numeroPedido: e.numeroPedido || '',
+      numeroProcesso: e.numeroProcesso || '',
+      dataNotaFiscal: e.dataNotaFiscal || null,
+      valorNotaFiscal: e.valorNotaFiscal != null ? Number(e.valorNotaFiscal) : null,
+      empenhoPDF: e.empenhoPDF || null,
+      notaFiscalPDF: e.notaFiscalPDF || null,
+      editalId: id,
+    }));
+
+    await prisma.$transaction(async (tx) => {
+      await tx.empenho.deleteMany({ where: { editalId: id } });
+      if (empenhosParaCriar.length > 0) {
+        await tx.empenho.createMany({
+          data: empenhosParaCriar,
+        });
+      }
+    });
+
+    const editalAtualizado = await prisma.edital.findUnique({
+      where: { id },
+      include: {
+        itens: true,
+        saidas: true,
+        empenhos: true,
+      },
+    });
+
+    res.json(editalAtualizado);
+  } catch (error) {
+    console.error('Update edital empenhos error:', error);
+    res.status(500).json({ error: 'Erro ao atualizar empenhos do edital.' });
+  }
+});
+
+// --- RESTORE COMPLETO DE MATERIAIS ---
 app.post('/api/materiais/restore', authenticateToken, async (req, res) => {
   const dataToRestore = req.body;
   if (!Array.isArray(dataToRestore)) {
@@ -564,6 +534,7 @@ app.post('/api/materiais/restore', authenticateToken, async (req, res) => {
   }
 });
 
+// --- MUNICÍPIOS / EDITAIS CRUD SIMPLES ---
 app.post('/api/municipios', authenticateToken, async (req, res) => {
   const { nome } = req.body;
   try {
@@ -607,125 +578,6 @@ app.delete('/api/editais/:id', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error("Delete Edital error:", error);
     res.status(500).json({ error: 'Erro ao deletar edital.' });
-  }
-});
-
-// --- ROTAS GRANULARES DE EDITAL (itens, saídas, empenhos) ---
-
-// Atualizar apenas ITENS do edital
-app.put('/api/editais/:id/itens', authenticateToken, async (req, res) => {
-  const { id } = req.params;
-  const { itens } = req.body; // espera array de itens
-  if (!Array.isArray(itens)) {
-    return res.status(400).json({ error: 'Campo "itens" precisa ser um array.' });
-  }
-
-  try {
-    const result = await prisma.$transaction(async (tx) => {
-      // apaga itens atuais
-      await tx.estoqueItem.deleteMany({ where: { editalId: id } });
-
-      // recria itens
-      await tx.edital.update({
-        where: { id },
-        data: {
-          itens: {
-            create: itens.map(({ id: _drop, ...item }) => item),
-          },
-        },
-      });
-
-      // retorna edital atualizado
-      return tx.edital.findUnique({
-        where: { id },
-        include: {
-          itens: true,
-          saidas: true,
-          empenhos: true,
-        },
-      });
-    });
-
-    res.json(result);
-  } catch (error) {
-    console.error('Update only itens error:', error);
-    res.status(500).json({ error: 'Erro ao atualizar itens do edital.' });
-  }
-});
-
-// Atualizar apenas SAÍDAS do edital
-app.put('/api/editais/:id/saidas', authenticateToken, async (req, res) => {
-  const { id } = req.params;
-  const { saidas } = req.body;
-  if (!Array.isArray(saidas)) {
-    return res.status(400).json({ error: 'Campo "saidas" precisa ser um array.' });
-  }
-
-  try {
-    const result = await prisma.$transaction(async (tx) => {
-      await tx.saidaItem.deleteMany({ where: { editalId: id } });
-
-      await tx.edital.update({
-        where: { id },
-        data: {
-          saidas: {
-            create: saidas.map(({ id: _drop, ...saida }) => saída),
-          },
-        },
-      });
-
-      return tx.edital.findUnique({
-        where: { id },
-        include: {
-          itens: true,
-          saidas: true,
-          empenhos: true,
-        },
-      });
-    });
-
-    res.json(result);
-  } catch (error) {
-    console.error('Update only saidas error:', error);
-    res.status(500).json({ error: 'Erro ao atualizar saídas do edital.' });
-  }
-});
-
-// Atualizar apenas EMPENHOS do edital
-app.put('/api/editais/:id/empenhos', authenticateToken, async (req, res) => {
-  const { id } = req.params;
-  const { empenhos } = req.body;
-  if (!Array.isArray(empenhos)) {
-    return res.status(400).json({ error: 'Campo "empenhos" precisa ser um array.' });
-  }
-
-  try {
-    const result = await prisma.$transaction(async (tx) => {
-      await tx.empenho.deleteMany({ where: { editalId: id } });
-
-      await tx.edital.update({
-        where: { id },
-        data: {
-          empenhos: {
-            create: empenhos.map(({ id: _drop, ...emp }) => emp),
-          },
-        },
-      });
-
-      return tx.edital.findUnique({
-        where: { id },
-        include: {
-          itens: true,
-          saidas: true,
-          empenhos: true,
-        },
-      });
-    });
-
-    res.json(result);
-  } catch (error) {
-    console.error('Update only empenhos error:', error);
-    res.status(500).json({ error: 'Erro ao atualizar empenhos do edital.' });
   }
 });
 
