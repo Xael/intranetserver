@@ -610,6 +610,125 @@ app.delete('/api/editais/:id', authenticateToken, async (req, res) => {
   }
 });
 
+// --- ROTAS GRANULARES DE EDITAL (itens, saídas, empenhos) ---
+
+// Atualizar apenas ITENS do edital
+app.put('/api/editais/:id/itens', authenticateToken, async (req, res) => {
+  const { id } = req.params;
+  const { itens } = req.body; // espera array de itens
+  if (!Array.isArray(itens)) {
+    return res.status(400).json({ error: 'Campo "itens" precisa ser um array.' });
+  }
+
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      // apaga itens atuais
+      await tx.estoqueItem.deleteMany({ where: { editalId: id } });
+
+      // recria itens
+      await tx.edital.update({
+        where: { id },
+        data: {
+          itens: {
+            create: itens.map(({ id: _drop, ...item }) => item),
+          },
+        },
+      });
+
+      // retorna edital atualizado
+      return tx.edital.findUnique({
+        where: { id },
+        include: {
+          itens: true,
+          saidas: true,
+          empenhos: true,
+        },
+      });
+    });
+
+    res.json(result);
+  } catch (error) {
+    console.error('Update only itens error:', error);
+    res.status(500).json({ error: 'Erro ao atualizar itens do edital.' });
+  }
+});
+
+// Atualizar apenas SAÍDAS do edital
+app.put('/api/editais/:id/saidas', authenticateToken, async (req, res) => {
+  const { id } = req.params;
+  const { saidas } = req.body;
+  if (!Array.isArray(saidas)) {
+    return res.status(400).json({ error: 'Campo "saidas" precisa ser um array.' });
+  }
+
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      await tx.saidaItem.deleteMany({ where: { editalId: id } });
+
+      await tx.edital.update({
+        where: { id },
+        data: {
+          saidas: {
+            create: saidas.map(({ id: _drop, ...saida }) => saída),
+          },
+        },
+      });
+
+      return tx.edital.findUnique({
+        where: { id },
+        include: {
+          itens: true,
+          saidas: true,
+          empenhos: true,
+        },
+      });
+    });
+
+    res.json(result);
+  } catch (error) {
+    console.error('Update only saidas error:', error);
+    res.status(500).json({ error: 'Erro ao atualizar saídas do edital.' });
+  }
+});
+
+// Atualizar apenas EMPENHOS do edital
+app.put('/api/editais/:id/empenhos', authenticateToken, async (req, res) => {
+  const { id } = req.params;
+  const { empenhos } = req.body;
+  if (!Array.isArray(empenhos)) {
+    return res.status(400).json({ error: 'Campo "empenhos" precisa ser um array.' });
+  }
+
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      await tx.empenho.deleteMany({ where: { editalId: id } });
+
+      await tx.edital.update({
+        where: { id },
+        data: {
+          empenhos: {
+            create: empenhos.map(({ id: _drop, ...emp }) => emp),
+          },
+        },
+      });
+
+      return tx.edital.findUnique({
+        where: { id },
+        include: {
+          itens: true,
+          saidas: true,
+          empenhos: true,
+        },
+      });
+    });
+
+    res.json(result);
+  } catch (error) {
+    console.error('Update only empenhos error:', error);
+    res.status(500).json({ error: 'Erro ao atualizar empenhos do edital.' });
+  }
+});
+
 // --- CONTROLE DE EPI (ENTREGAS) ---
 app.get('/api/epi', authenticateToken, async (req, res) => {
   try {
