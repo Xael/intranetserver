@@ -79,12 +79,22 @@ app.get('/api/health', (req, res) => {
 // --- GERENCIAMENTO DE USUÁRIOS ---
 app.get('/api/users', authenticateToken, async (req, res) => {
   try {
-    const users = await prisma.user.findMany({
+    // Usando uma consulta mais robusta para evitar falhas com dados antigos (sem 'role').
+    // O Prisma pode falhar ao ler um valor NULL para um campo Enum não opcional.
+    const usersFromDb = await prisma.user.findMany({
       select: { id: true, name: true, username: true, createdAt: true, role: true },
       orderBy: { name: 'asc' },
     });
+
+    // Garante que todo usuário tenha um 'role' para o frontend.
+    const users = usersFromDb.map(user => ({
+      ...user,
+      role: user.role || 'OPERACIONAL',
+    }));
+    
     res.json(users);
   } catch (error) {
+    console.error("Erro em GET /api/users:", error);
     res.status(500).json({ error: 'Erro ao buscar usuários.' });
   }
 });
