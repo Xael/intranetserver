@@ -206,36 +206,29 @@ app.delete('/api/licitacoes/:id', authenticateToken, async (req, res) => {
   }
 });
 
-// ROTA CORRIGIDA
 app.post('/api/restore-bids-backup', authenticateToken, async (req, res) => {
-  const { licitacoes } = req.body;
-  if (!Array.isArray(licitacoes)) {
-    return res.status(400).json({ error: 'O corpo da requisição deve conter um array de "licitacoes".' });
-  }
+  const { licitacoes } = req.body;
+  if (!Array.isArray(licitacoes)) {
+    return res.status(400).json({ error: 'O corpo da requisição deve conter um array de "licitacoes".' });
+  }
 
-  try {
-    await prisma.$transaction(async (tx) => {
-      await tx.licitacaoDetalhada.deleteMany({});
-      
-      // LINHA CORRIGIDA:
-      const dataToCreate = licitacoes.map(({ id, ...rest }) => {
-        // Mapeia o status de string para enum
-        if (rest.status) {
-          rest.status = mapStatusToEnum(rest.status);
-        }
-        return rest;
+  try {
+    await prisma.$transaction(async (tx) => {
+      await tx.licitacaoDetalhada.deleteMany({});
+      const dataToCreate = licitacoes.map(({ id, ...rest }) => ({
+        ...rest,
+        status: mapStatusToEnum(rest.status),
+      }));
+      await tx.licitacaoDetalhada.createMany({
+        data: dataToCreate,
+        skipDuplicates: true,
       });
-
-      await tx.licitacaoDetalhada.createMany({
-        data: dataToCreate,
-        skipDuplicates: true,
-      });
-    });
-    res.status(200).json({ message: 'Backup das licitações restaurado com sucesso.' });
-  } catch (error) {
-    console.error("Restore Licitacoes error:", error);
-    res.status(500).json({ error: 'Erro ao restaurar o backup de licitações.' });
-  }
+    });
+    res.status(200).json({ message: 'Backup das licitações restaurado com sucesso.' });
+  } catch (error) {
+    console.error("Restore Licitacoes error:", error);
+    res.status(500).json({ error: 'Erro ao restaurar o backup de licitações.' });
+  }
 });
 
 
@@ -331,7 +324,7 @@ app.get('/api/materiais', authenticateToken, async (req, res) => {
 
 app.put('/api/editais/:id', authenticateToken, async (req, res) => {
     const { id } = req.params;
-    const { nome, municipioId, itens, saidas, empenhos } = req.body;
+    const { nome, itens, saidas, empenhos } = req.body;
     try {
         const result = await prisma.$transaction(async (tx) => {
             await tx.estoqueItem.deleteMany({ where: { editalId: id } });
@@ -342,7 +335,6 @@ app.put('/api/editais/:id', authenticateToken, async (req, res) => {
                 where: { id },
                 data: {
                     nome,
-                    municipioId,
                     itens: { create: (itens || []).map(({ id, ...item }) => item) },
                     saidas: { create: (saidas || []).map(({ id, ...saida }) => saida) },
                     empenhos: { create: (empenhos || []).map(({ id, ...emp }) => emp) },
