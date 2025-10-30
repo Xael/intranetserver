@@ -63,8 +63,8 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(401).json({ error: 'Credenciais inválidas.' });
     }
 
-    const token = jwt.sign({ userId: user.id, username: user.username }, JWT_SECRET, { expiresIn: '8h' });
-    res.json({ token, user: { username: user.username, name: user.name } });
+    const token = jwt.sign({ userId: user.id, username: user.username, role: user.role }, JWT_SECRET, { expiresIn: '8h' });
+    res.json({ token, user: { username: user.username, name: user.name, role: user.role } });
   } catch (error) {
     console.error("Login error:", error);
     res.status(500).json({ error: 'Erro no servidor durante o login.' });
@@ -80,7 +80,7 @@ app.get('/api/health', (req, res) => {
 app.get('/api/users', authenticateToken, async (req, res) => {
   try {
     const users = await prisma.user.findMany({
-      select: { id: true, name: true, username: true, createdAt: true },
+      select: { id: true, name: true, username: true, createdAt: true, role: true },
       orderBy: { name: 'asc' },
     });
     res.json(users);
@@ -90,15 +90,15 @@ app.get('/api/users', authenticateToken, async (req, res) => {
 });
 
 app.post('/api/users', authenticateToken, async (req, res) => {
-  const { name, username, password } = req.body;
+  const { name, username, password, role } = req.body;
   if (!name || !username || !password) {
     return res.status(400).json({ error: 'Nome, nome de usuário e senha são obrigatórios.' });
   }
   try {
     const passwordHash = await bcrypt.hash(password, 10);
     const newUser = await prisma.user.create({
-      data: { name, username, passwordHash },
-      select: { id: true, name: true, username: true, createdAt: true },
+      data: { name, username, passwordHash, role: role || 'OPERACIONAL' },
+      select: { id: true, name: true, username: true, createdAt: true, role: true },
     });
     res.status(201).json(newUser);
   } catch (error) {
@@ -111,9 +111,9 @@ app.post('/api/users', authenticateToken, async (req, res) => {
 
 app.put('/api/users/:id', authenticateToken, async (req, res) => {
   const { id } = req.params;
-  const { name, username, password } = req.body;
+  const { name, username, password, role } = req.body;
 
-  let dataToUpdate = { name, username };
+  let dataToUpdate = { name, username, role };
   if (password) {
     dataToUpdate.passwordHash = await bcrypt.hash(password, 10);
   }
@@ -122,7 +122,7 @@ app.put('/api/users/:id', authenticateToken, async (req, res) => {
     const updatedUser = await prisma.user.update({
       where: { id },
       data: dataToUpdate,
-      select: { id: true, name: true, username: true, createdAt: true },
+      select: { id: true, name: true, username: true, createdAt: true, role: true },
     });
     res.json(updatedUser);
   } catch (error) {
