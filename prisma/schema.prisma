@@ -210,7 +210,7 @@ model CotacaoItem {
   @@map("cotacao_itens")
 }
 
-// --- VALORES DE REFERÊNCIA ---
+// --- VALORES DE REFERÊNCIA DAS COTAÇÕES ---
 model ValorReferencia {
   id      String @id
   produto String
