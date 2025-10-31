@@ -11,7 +11,7 @@ async function main() {
 
   const passwordHash = await bcrypt.hash(password, 10);
 
-  // upsert garante que, se já existir, atualiza
+  // upsert garante que cria se não existir e atualiza se já existir
   const admin = await prisma.user.upsert({
     where: { username },
     update: {
