@@ -1,260 +1,42 @@
-// 1. Conexão com o banco
-datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+// prisma/seed.js
+const { PrismaClient, Role } = require('@prisma/client');
+const bcrypt = require('bcryptjs');
+
+const prisma = new PrismaClient();
+
+async function main() {
+  const username = 'admincrb';
+  const password = 'crb312@!';
+  const name = 'Administrador';
+
+  // gera o hash
+  const passwordHash = await bcrypt.hash(password, 10);
+
+  // upsert garante que, se já existir, ele só atualiza
+  const admin = await prisma.user.upsert({
+    where: { username },
+    update: {
+      // se já existir, podemos atualizar o nome, o papel e até a senha
+      name,
+      role: Role.ADMIN,
+      passwordHash,
+    },
+    create: {
+      username,
+      name,
+      passwordHash,
+      role: Role.ADMIN,
+    },
+  });
+
+  console.log('Usuário admin pronto:', admin.username);
 }
 
-// 2. Geração do client
-generator client {
-  provider = "prisma-client-js"
-}
-
-//
-// ===== Enums =====
-//
-
-enum StatusLicitacaoDetalhada {
-  EM_ANDAMENTO
-  VENCIDA
-  ENCERRADA
-  DESCLASSIFICADA
-}
-
-enum Role {
-  ADMIN
-  OPERACIONAL
-}
-
-//
-// ===== MODELS =====
-//
-
-// --- USUÁRIOS (autenticação / perfis) ---
-model User {
-  id           String   @id @default(cuid())
-  username     String   @unique
-  passwordHash String
-  name         String
-  role         Role     @default(OPERACIONAL)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-
-  @@map("users")
-}
-
-// --- LICITAÇÕES DETALHADAS ---
-model LicitacaoDetalhada {
-  id               String                   @id @default(cuid())
-  city             String
-  bidNumber        String
-  realizationDate  String
-  placement        String
-  status           StatusLicitacaoDetalhada
-  companyName      String
-  platformLink     String
-  lastUpdated      DateTime                 @updatedAt
-  progressForecast String?
-
-  @@map("licitacoes_detalhadas")
-}
-
-// --- CALENDÁRIO ---
-model EventoCalendarioDetalhado {
-  id          String   @id @default(cuid())
-  start       String
-  title       String
-  city        String
-  bid_number  String
-  time        String?
-  location    String?
-  description String?
-
-  @@map("eventos_calendario")
-}
-
-// --- CONTROLE DE MATERIAIS ---
-// Município -> vários editais
-
-model Municipio {
-  id      String   @id @default(cuid())
-  nome    String   @unique
-  editais Edital[]
-
-  @@map("municipios")
-}
-
-model Edital {
-  id          String        @id @default(cuid())
-  nome        String
-  itens       EstoqueItem[]
-  saidas      SaidaItem[]
-  empenhos    Empenho[]
-  municipio   Municipio     @relation(fields: [municipioId], references: [id], onDelete: Cascade)
-  municipioId String
-
-  @@map("editais")
-}
-
-model EstoqueItem {
-  id            String  @id @default(cuid())
-  descricao     String
-  marca         String?
-  unidade       String
-  quantidade    Float
-  valorUnitario Float
-  valorTotal    Float
-  edital        Edital  @relation(fields: [editalId], references: [id], onDelete: Cascade)
-  editalId      String
-
-  @@map("estoque_itens")
-}
-
-model SaidaItem {
-  id            String  @id @default(cuid())
-  itemIndex     Int
-  descricao     String
-  marca         String?
-  quantidade    Float
-  valorUnitario Float
-  valorTotal    Float
-  data          String
-  notaFiscal    String
-  edital        Edital  @relation(fields: [editalId], references: [id], onDelete: Cascade)
-  editalId      String
-
-  @@map("saidas_itens")
-}
-
-model Empenho {
-  id              String  @id @default(cuid())
-  dataPedido      String
-  numeroPedido    String
-  numeroProcesso  String
-  dataNotaFiscal  String?
-  valorNotaFiscal Float?
-  empenhoPDF      Json?
-  notaFiscalPDF   Json?
-  edital          Edital  @relation(fields: [editalId], references: [id], onDelete: Cascade)
-  editalId        String
-
-  @@map("empenhos")
-}
-
-// --- SIMULAÇÕES DE MATERIAIS (aquela aba que salva itens do edital) ---
-model SimulacaoSalva {
-  id        String          @id @default(cuid())
-  data      DateTime        @default(now())
-  municipio String
-  edital    String
-  itens     SimulacaoItem[]
-
-  @@map("simulacoes_salvas")
-}
-
-model SimulacaoItem {
-  id            Int             @id @default(autoincrement())
-  itemIndex     Int
-  descricao     String
-  marca         String?
-  unidade       String
-  quantidade    Float
-  valorUnitario Float
-  valorTotal    Float
-  simulacao     SimulacaoSalva  @relation(fields: [simulacaoId], references: [id], onDelete: Cascade)
-  simulacaoId   String
-
-  @@map("simulacoes_itens")
-}
-
-// --- EPI (entregas) ---
-model EPIEntrega {
-  id          String @id @default(cuid())
-  funcionario String
-  item        String
-  quantidade  Int
-  dataEntrega String
-
-  @@map("epi_entregas")
-}
-
-// --- EPI (estoque) ---
-model EPIEstoqueItem {
-  id           String  @id @default(cuid())
-  name         String  @unique
-  qty          Int     @default(0)
-  manualOut    Boolean @default(false)
-  manualOutQty Int     @default(0)
-
-  @@map("epi_estoque_itens")
-}
-
-// --- COTAÇÕES ---
-model Cotacao {
-  id    String        @id @default(cuid())
-  local String
-  data  String          // YYYY-MM-DD vindo do front
-  itens CotacaoItem[]
-
-  @@map("cotacoes")
-}
-
-model CotacaoItem {
-  id            String  @id @default(cuid())
-  produto       String
-  unidade       String
-  quantidade    Float
-  valorUnitario Float
-  valorTotal    Float
-  marca         String?
-  cotacao       Cotacao @relation(fields: [cotacaoId], references: [id], onDelete: Cascade)
-  cotacaoId     String
-
-  @@map("cotacao_itens")
-}
-
-// --- VALORES DE REFERÊNCIA DAS COTAÇÕES ---
-model ValorReferencia {
-  id      String @id            // você usa o nome normalizado do produto como id
-  produto String
-  valor   Float
-
-  @@map("valores_referencia")
-}
-
-// --- SIMULAÇÕES DE COTAÇÃO (a que deu erro ao restaurar) ---
-model SimulacaoCotacaoSalva {
-  id    String                  @id @default(cuid())
-  nome  String
-  data  DateTime                @default(now())
-  itens SimulacaoCotacaoItem[]
-
-  @@map("simulacoes_cotacoes_salvas")
-}
-
-model SimulacaoCotacaoItem {
-  id                 Int                    @id @default(autoincrement())
-  produto            String
-  unidade            String
-  quantidade         Float
-  valorUnitario      Float
-  valorTotal         Float
-  marca              String?
-  // campos de origem usados pelo server:
-  origemCotacaoId    String
-  origemCotacaoLocal String
-  origemCotacaoData  String
-  simulacao          SimulacaoCotacaoSalva  @relation(fields: [simulacaoId], references: [id], onDelete: Cascade)
-  simulacaoId        String
-
-  @@map("simulacoes_cotacoes_itens")
-}
-
-// --- CALCULADORA (JSON) ---
-model CalculadoraSalva {
-  id     String   @id @default(cuid())
-  nome   String
-  data   DateTime @default(now())
-  custos Json
-
-  @@map("calculadora_salva")
-}
+main()
+  .catch((e) => {
+    console.error('Erro ao rodar seed:', e);
+    process.exit(1);
+  })
+  .finally(async () => {
+    await prisma.$disconnect();
+  });
