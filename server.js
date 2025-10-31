@@ -79,19 +79,12 @@ app.get('/api/health', (req, res) => {
 // --- GERENCIAMENTO DE USUÁRIOS ---
 app.get('/api/users', authenticateToken, async (req, res) => {
   try {
-    // Usando uma consulta mais robusta para evitar falhas com dados antigos (sem 'role').
-    // O Prisma pode falhar ao ler um valor NULL para um campo Enum não opcional.
-    const usersFromDb = await prisma.user.findMany({
-      select: { id: true, name: true, username: true, createdAt: true, role: true },
-      orderBy: { name: 'asc' },
-    });
-
-    // Garante que todo usuário tenha um 'role' para o frontend.
-    const users = usersFromDb.map(user => ({
-      ...user,
-      role: user.role || 'OPERACIONAL',
-    }));
-    
+    // FIX: Raw query to bypass Prisma's enum validation on potentially null 'role' fields for legacy users.
+    const users = await prisma.$queryRaw`
+      SELECT id, name, username, "createdAt", COALESCE(role, 'OPERACIONAL') as role
+      FROM "User"
+      ORDER BY name ASC;
+    `;
     res.json(users);
   } catch (error) {
     console.error("Erro em GET /api/users:", error);
@@ -112,6 +105,7 @@ app.post('/api/users', authenticateToken, async (req, res) => {
     });
     res.status(201).json(newUser);
   } catch (error) {
+    console.error("Erro detalhado em POST /api/users:", error);
     if (error.code === 'P2002') {
       return res.status(409).json({ error: 'Nome de usuário já existe.' });
     }
@@ -123,12 +117,12 @@ app.put('/api/users/:id', authenticateToken, async (req, res) => {
   const { id } = req.params;
   const { name, username, password, role } = req.body;
 
-  let dataToUpdate = { name, username, role };
-  if (password) {
-    dataToUpdate.passwordHash = await bcrypt.hash(password, 10);
-  }
-
   try {
+    const dataToUpdate = { name, username, role };
+    if (password) {
+      dataToUpdate.passwordHash = await bcrypt.hash(password, 10);
+    }
+
     const updatedUser = await prisma.user.update({
       where: { id },
       data: dataToUpdate,
@@ -136,8 +130,11 @@ app.put('/api/users/:id', authenticateToken, async (req, res) => {
     });
     res.json(updatedUser);
   } catch (error) {
+    console.error("Erro detalhado em PUT /api/users/:id:", error);
     if (error.code === 'P2002') {
       return res.status(409).json({ error: 'Nome de usuário já existe.' });
+    } else if (error.code === 'P2025') {
+       return res.status(404).json({ error: 'Usuário não encontrado.' });
     }
     res.status(500).json({ error: 'Erro ao atualizar usuário.' });
   }
@@ -149,9 +146,14 @@ app.delete('/api/users/:id', authenticateToken, async (req, res) => {
     await prisma.user.delete({ where: { id } });
     res.status(204).send();
   } catch (error) {
+    console.error("Erro detalhado em DELETE /api/users/:id:", error);
+     if (error.code === 'P2025') {
+       return res.status(404).json({ error: 'Usuário não encontrado.' });
+    }
     res.status(500).json({ error: 'Erro ao excluir usuário.' });
   }
 });
+
 
 // --- LICITAÇÕES ---
 app.get('/api/licitacoes', authenticateToken, async (req, res) => {
