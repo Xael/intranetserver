@@ -68,6 +68,7 @@ model EventoCalendarioDetalhado {
   time        String?
   location    String?
   description String?
+  documentationStatus String? @default("PENDENTE")
 
   @@map("eventos_calendario")
 }
@@ -255,3 +256,4 @@ model CalculadoraSalva {
 
   @@map("calculadora_salva")
 }
+
