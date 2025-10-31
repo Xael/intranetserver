@@ -79,18 +79,30 @@ app.get('/api/health', (req, res) => {
 // --- GERENCIAMENTO DE USUÁRIOS ---
 app.get('/api/users', authenticateToken, async (req, res) => {
   try {
-    // FIX: Raw query to bypass Prisma's enum validation on potentially null 'role' fields for legacy users.
-    const users = await prisma.$queryRaw`
-      SELECT id, name, username, "createdAt", COALESCE(role, 'OPERACIONAL') as role
-      FROM "User"
-      ORDER BY name ASC;
-    `;
+    const usersFromDb = await prisma.user.findMany({
+      select: {
+        id: true,
+        name: true,
+        username: true,
+        createdAt: true,
+        role: true,
+      },
+      orderBy: { name: 'asc' },
+    });
+
+    // garante role para registros antigos
+    const users = usersFromDb.map((u) => ({
+      ...u,
+      role: u.role || 'OPERACIONAL',
+    }));
+
     res.json(users);
   } catch (error) {
-    console.error("Erro em GET /api/users:", error);
+    console.error('Erro em GET /api/users:', error);
     res.status(500).json({ error: 'Erro ao buscar usuários.' });
   }
 });
+
 
 app.post('/api/users', authenticateToken, async (req, res) => {
   const { name, username, password, role } = req.body;
