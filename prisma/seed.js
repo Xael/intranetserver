@@ -1,15 +1,16 @@
-
-const { PrismaClient } = require('@prisma/client');
+// prisma/seed.js
+const { PrismaClient, Role } = require('@prisma/client');
 const bcrypt = require('bcryptjs');
 
 const prisma = new PrismaClient();
 
 async function main() {
+  // dados do admin padrão
   const username = 'admincrb';
   const password = 'crb312@!';
   const name = 'Administrador';
 
-  // Verifica se o usuário admin já existe
+  // verifica se já existe
   const existingAdmin = await prisma.user.findUnique({
     where: { username },
   });
@@ -19,22 +20,26 @@ async function main() {
     return;
   }
 
-  // Se não existir, cria o usuário
+  // cria o hash
   const passwordHash = await bcrypt.hash(password, 10);
+
+  // cria o usuário
   await prisma.user.create({
     data: {
       username,
       passwordHash,
       name,
-      role: 'ADMIN',
+      // aqui é o ponto importante: usar o enum do Prisma
+      role: Role.ADMIN, // ou 'ADMIN' se você preferir string, mas Role.ADMIN é mais seguro
     },
   });
+
   console.log('Usuário admin criado com sucesso!');
 }
 
 main()
   .catch((e) => {
-    console.error(e);
+    console.error('Erro ao rodar seed:', e);
     process.exit(1);
   })
   .finally(async () => {
