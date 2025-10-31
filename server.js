@@ -247,6 +247,42 @@ app.post('/api/restore-bids-backup', authenticateToken, async (req, res) => {
 });
 
 // --- CALENDÁRIO ---
+
+// POST /api/events
+app.post('/api/events', authenticateToken, async (req, res) => {
+  try {
+    const { id, ...data } = req.body;
+    const newEvent = await prisma.eventoCalendarioDetalhado.create({
+      data: {
+        ...data,
+        documentationStatus: data.documentationStatus || 'PENDENTE',
+      },
+    });
+    res.status(201).json(newEvent);
+  } catch (error) {
+    console.error("Create Event error:", error);
+    res.status(500).json({ error: 'Erro ao criar evento.' });
+  }
+});
+
+// PUT /api/events/:id
+app.put('/api/events/:id', authenticateToken, async (req, res) => {
+  try {
+    const { id, ...data } = req.body;
+    const updatedEvent = await prisma.eventoCalendarioDetalhado.update({
+      where: { id: req.params.id },
+      data: {
+        ...data,
+        documentationStatus: data.documentationStatus || 'PENDENTE',
+      },
+    });
+    res.json(updatedEvent);
+  } catch (error) {
+    console.error("Update Event error:", error);
+    res.status(500).json({ error: 'Erro ao atualizar evento.' });
+  }
+});
+
 app.get('/api/events', authenticateToken, async (req, res) => {
   try {
     const events = await prisma.eventoCalendarioDetalhado.findMany();
