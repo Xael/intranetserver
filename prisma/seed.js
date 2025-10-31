@@ -5,36 +5,29 @@ const bcrypt = require('bcryptjs');
 const prisma = new PrismaClient();
 
 async function main() {
-  // dados do admin padrão
   const username = 'admincrb';
   const password = 'crb312@!';
   const name = 'Administrador';
 
-  // verifica se já existe
-  const existingAdmin = await prisma.user.findUnique({
-    where: { username },
-  });
-
-  if (existingAdmin) {
-    console.log('Usuário admin já existe. Nenhuma ação necessária.');
-    return;
-  }
-
-  // cria o hash
   const passwordHash = await bcrypt.hash(password, 10);
 
-  // cria o usuário
-  await prisma.user.create({
-    data: {
-      username,
-      passwordHash,
+  // upsert garante que, se já existir, atualiza
+  const admin = await prisma.user.upsert({
+    where: { username },
+    update: {
       name,
-      // aqui é o ponto importante: usar o enum do Prisma
-      role: Role.ADMIN, // ou 'ADMIN' se você preferir string, mas Role.ADMIN é mais seguro
+      role: Role.ADMIN,
+      passwordHash,
+    },
+    create: {
+      username,
+      name,
+      passwordHash,
+      role: Role.ADMIN,
     },
   });
 
-  console.log('Usuário admin criado com sucesso!');
+  console.log('Usuário admin pronto:', admin.username);
 }
 
 main()
