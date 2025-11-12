@@ -372,32 +372,59 @@ app.get('/api/materiais', authenticateToken, async (req, res) => {
 });
 
 // --- ROTA ANTIGA (full replace) — continua existindo para compatibilidade ---
-app.put('/api/editais/:id', authenticateToken, async (req, res) => {
-  const { id } = req.params;
-  const { nome, itens, saidas, empenhos } = req.body;
-  try {
-    const result = await prisma.$transaction(async (tx) => {
-      await tx.estoqueItem.deleteMany({ where: { editalId: id } });
-      await tx.saidaItem.deleteMany({ where: { editalId: id } });
-      await tx.empenho.deleteMany({ where: { editalId: id } });
+// 3) Atualizar SOMENTE empenhos do edital
+app.put('/api/editais/:id/empenhos', authenticateToken, async (req, res) => {
+  const { id } = req.params;
+  const { empenhos } = req.body;
 
-      const updatedEdital = await tx.edital.update({
-        where: { id },
-        data: {
-          nome,
-          itens: { create: (itens || []).map(({ id, ...item }) => item) },
-          saidas: { create: (saidas || []).map(({ id, ...saida }) => saida) },
-          empenhos: { create: (empenhos || []).map(({ id, ...emp }) => emp) },
-        },
-        include: { itens: true, saidas: true, empenhos: true },
-      });
-      return updatedEdital;
-    });
-    res.json(result);
-  } catch (error) {
-    console.error("Update Edital error:", error);
-    res.status(500).json({ error: 'Erro ao atualizar dados do edital.' });
-  }
+  if (!Array.isArray(empenhos)) {
+    return res.status(400).json({ error: 'Corpo inválido: esperado { empenhos: [...] }' });
+  }
+
+  try {
+    // Mapeia os dados, removendo o ID e garantindo os tipos corretos
+    const empenhosParaCriar = (empenhos || []).map((e) => {
+      // --- 🔑 CORREÇÃO: Remove o ID do objeto para que o Prisma gere um novo ---
+      const { id: tempId, ...rest } = e;
+      
+      return {
+        dataPedido: e.dataPedido || '',
+        numeroPedido: e.numeroPedido || '',
+        numeroProcesso: e.numeroProcesso || '',
+        dataNotaFiscal: e.dataNotaFiscal || null,
+        valorNotaFiscal: e.valorNotaFiscal != null ? Number(e.valorNotaFiscal) : null,
+        empenhoPDF: e.empenhoPDF || null,
+        notaFiscalPDF: e.notaFiscalPDF || null,
+        editalId: id,
+      };
+    });
+
+    await prisma.$transaction(async (tx) => {
+      // Apaga todos os empenhos antigos
+      await tx.empenho.deleteMany({ where: { editalId: id } });
+      
+      // Recria todos os empenhos (com novos IDs gerados pelo Prisma)
+      if (empenhosParaCriar.length > 0) {
+        await tx.empenho.createMany({
+          data: empenhosParaCriar, 
+        });
+      }
+    });
+
+    const editalAtualizado = await prisma.edital.findUnique({
+      where: { id },
+      include: {
+        itens: true,
+        saidas: true,
+        empenhos: true,
+      },
+    });
+
+    res.json(editalAtualizado);
+  } catch (error) {
+    console.error('Update edital empenhos error:', error);
+    res.status(500).json({ error: 'Erro ao atualizar empenhos do edital.' });
+  }
 });
 
 // 🔴 🔴 🔴 NOVAS ROTAS INCREMENTAIS (itens / saídas / empenhos) 🔴 🔴 🔴
