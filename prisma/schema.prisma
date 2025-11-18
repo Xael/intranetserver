@@ -135,6 +135,8 @@ model Empenho {
   notaFiscalPDF   Json?
   edital          Edital  @relation(fields: [editalId], references: [id], onDelete: Cascade)
   editalId        String
+  statusPagamento String?   @default("PENDENTE") // Novo Campo
+  dataPagamento   String?  
 
   @@map("empenhos")
 }
@@ -256,4 +258,5 @@ model CalculadoraSalva {
 
   @@map("calculadora_salva")
 }
+
 
