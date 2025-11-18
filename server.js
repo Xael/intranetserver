@@ -527,6 +527,8 @@ app.put('/api/editais/:id/empenhos', authenticateToken, async (req, res) => {
       valorNotaFiscal: e.valorNotaFiscal != null ? Number(e.valorNotaFiscal) : null,
       empenhoPDF: e.empenhoPDF || null,
       notaFiscalPDF: e.notaFiscalPDF || null,
+      statusPagamento: e.statusPagamento || 'PENDENTE', // Novo Campo Mapeado
+      dataPagamento: e.dataPagamento || null,           // Novo Campo Mapeado
       editalId: id,
     }));
 
