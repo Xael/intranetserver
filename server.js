@@ -772,215 +772,271 @@ app.post('/api/epi-estoque/restore', authenticateToken, async (req, res) => {
         });
       }
     });
-    res.status(200).json({ message: 'Backup de estoque de EPI restaurado.' });
+    res.status(200).json({ message: 'Backup restaurado.' });
   } catch (error) {
-    res.status(500).json({ error: 'Erro ao restaurar o backup de estoque de EPI.' });
+    res.status(500).json({ error: 'Erro ao restaurar.' });
   }
 });
 
-// --- SIMULAÇÕES SALVAS (MATERIAIS) ---
+// --- SIMULAÇÕES / COTAÇÕES / CALCULADORA (Simplificados) ---
 app.get('/api/simulacoes', authenticateToken, async (req, res) => {
-  try {
-    const simulacoes = await prisma.simulacaoSalva.findMany({
-      include: { itens: true }
-    });
-    res.json(simulacoes);
-  } catch (error) {
-    console.error("Get Simulacoes error:", error);
-    res.status(500).json({ error: 'Erro ao buscar simulações salvas.' });
-  }
+  const d = await prisma.simulacaoSalva.findMany({ include: { itens: true } });
+  res.json(d);
 });
-
 app.post('/api/simulacoes', authenticateToken, async (req, res) => {
-  const { id, itens, ...simulacaoData } = req.body;
-  try {
-    const novaSimulacao = await prisma.simulacaoSalva.create({
-      data: {
-        ...simulacaoData,
-        itens: {
-          create: (itens || []).map(({ id, ...item }) => item),
-        },
-      },
-      include: { itens: true }
-    });
-    res.status(201).json(novaSimulacao);
-  } catch (error) {
-    console.error("Create Simulacao error:", error);
-    res.status(500).json({ error: 'Erro ao salvar simulação.' });
-  }
+  const { id, itens, ...data } = req.body;
+  const n = await prisma.simulacaoSalva.create({
+    data: { ...data, itens: { create: itens } }, include: { itens: true }
+  });
+  res.status(201).json(n);
 });
-
 app.delete('/api/simulacoes/:id', authenticateToken, async (req, res) => {
-  try {
-    await prisma.simulacaoSalva.delete({ where: { id: req.params.id } });
-    res.status(204).send();
-  } catch (error) {
-    console.error("Delete Simulacao error:", error);
-    res.status(500).json({ error: 'Erro ao deletar simulação.' });
-  }
+  await prisma.simulacaoSalva.delete({ where: { id: req.params.id } });
+  res.status(204).send();
 });
 
-// --- COTAÇÕES ---
 app.get('/api/cotacoes', authenticateToken, async (req, res) => {
-  try {
-    const cotacoes = await prisma.cotacao.findMany({ include: { itens: true }, orderBy: { data: 'desc' } });
-    res.json(cotacoes);
-  } catch (error) {
-    res.status(500).json({ error: 'Erro ao buscar cotações.' });
-  }
+  const c = await prisma.cotacao.findMany({ include: { itens: true }, orderBy: { data: 'desc' } });
+  res.json(c);
 });
-
 app.post('/api/cotacoes/import', authenticateToken, async (req, res) => {
   const { cotacoes } = req.body;
-  if (!Array.isArray(cotacoes)) return res.status(400).json({ error: "Formato inválido." });
-  try {
-    const created = await prisma.$transaction(
-      cotacoes.map(c => prisma.cotacao.create({
-        data: {
-          local: c.local,
-          data: c.data,
-          itens: {
-            create: c.itens.map(({ id, ...item }) => item)
-          }
-        }
-      }))
-    );
-    res.status(201).json(created);
-  } catch (error) {
-    res.status(500).json({ error: 'Erro ao importar cotações.' });
-  }
+  await prisma.$transaction(
+    cotacoes.map(c => prisma.cotacao.create({
+      data: { local: c.local, data: c.data, itens: { create: c.itens } }
+    }))
+  );
+  res.status(201).json({ msg: 'Importado' });
 });
-
 app.delete('/api/cotacoes/:id', authenticateToken, async (req, res) => {
-  try {
-    await prisma.cotacao.delete({ where: { id: req.params.id } });
-    res.status(204).send();
-  } catch (error) {
-    res.status(500).json({ error: 'Erro ao deletar cotação.' });
-  }
+  await prisma.cotacao.delete({ where: { id: req.params.id } });
+  res.status(204).send();
 });
 
-// --- VALORES DE REFERÊNCIA ---
-app.get('/api/valores-referencia', authenticateToken, async (req, res) => {
-  try {
-    const valores = await prisma.valorReferencia.findMany();
-    res.json(valores);
-  } catch (error) {
-    res.status(500).json({ error: 'Erro ao buscar valores de referência.' });
-  }
-});
-
-app.post('/api/valores-referencia', authenticateToken, async (req, res) => {
-  const { id, produto, valor } = req.body;
-  try {
-    const upsertedValor = await prisma.valorReferencia.upsert({
-      where: { id },
-      update: { produto, valor },
-      create: { id, produto, valor },
-    });
-    res.status(201).json(upsertedValor);
-  } catch (error) {
-    res.status(500).json({ error: 'Erro ao salvar valor de referência.' });
-  }
-});
-
-app.delete('/api/valores-referencia/:id', authenticateToken, async (req, res) => {
-  try {
-    await prisma.valorReferencia.delete({ where: { id: req.params.id } });
-    res.status(204).send();
-  } catch (error) {
-    res.status(500).json({ error: 'Erro ao deletar valor de referência.' });
-  }
-});
-
-// --- SIMULAÇÕES DE COTAÇÃO ---
 app.get('/api/simulacoes-cotacoes', authenticateToken, async (req, res) => {
-  try {
-    const simulacoes = await prisma.simulacaoCotacaoSalva.findMany({ include: { itens: true } });
-    res.json(simulacoes);
-  } catch (error) {
-    res.status(500).json({ error: 'Erro ao buscar simulações de cotação.' });
-  }
+  const s = await prisma.simulacaoCotacaoSalva.findMany({ include: { itens: true } });
+  res.json(s);
 });
-
 app.post('/api/simulacoes-cotacoes', authenticateToken, async (req, res) => {
   const { nome, data, itens } = req.body;
-  try {
-    const newSimulacao = await prisma.simulacaoCotacaoSalva.create({
-      data: {
-        nome,
-        data,
-        itens: {
-          create: (itens || []).map(item => ({
-            produto: item.produto,
-            unidade: item.unidade,
-            quantidade: item.quantidade,
-            valorUnitario: item.valorUnitario,
-            valorTotal: item.valorTotal,
-            marca: item.marca,
-            origemCotacaoId: item.cotacaoOrigem.id,
-            origemCotacaoLocal: item.cotacaoOrigem.local,
-            origemCotacaoData: item.cotacaoOrigem.data,
-          }))
-        }
-      },
-      include: { itens: true }
-    });
-    res.status(201).json(newSimulacao);
-  } catch (error) {
-    console.error(error)
-    res.status(500).json({ error: 'Erro ao salvar simulação de cotação.' });
-  }
+  const n = await prisma.simulacaoCotacaoSalva.create({
+    data: { 
+      nome, data, 
+      itens: { create: itens.map(i => ({ 
+        produto: i.produto, unidade: i.unidade, quantidade: i.quantidade, 
+        valorUnitario: i.valorUnitario, valorTotal: i.valorTotal, marca: i.marca,
+        origemCotacaoId: i.cotacaoOrigem.id, origemCotacaoLocal: i.cotacaoOrigem.local,
+        origemCotacaoData: i.cotacaoOrigem.data
+      })) } 
+    }, include: { itens: true }
+  });
+  res.status(201).json(n);
 });
-
 app.delete('/api/simulacoes-cotacoes/:id', authenticateToken, async (req, res) => {
-  try {
-    await prisma.simulacaoCotacaoSalva.delete({ where: { id: req.params.id } });
-    res.status(204).send();
-  } catch (error) {
-    res.status(500).json({ error: 'Erro ao deletar simulação de cotação.' });
-  }
+  await prisma.simulacaoCotacaoSalva.delete({ where: { id: req.params.id } });
+  res.status(204).send();
 });
 
-// --- CALCULADORA ---
 app.get('/api/calculadora', authenticateToken, async (req, res) => {
-  try {
-    const calculos = await prisma.calculadoraSalva.findMany({
-      orderBy: { data: 'desc' }
-    });
-    res.json(calculos);
-  } catch (error) {
-    console.error("Get Calculadora error:", error);
-    res.status(500).json({ error: 'Erro ao buscar cálculos salvos.' });
-  }
+  const c = await prisma.calculadoraSalva.findMany({ orderBy: { data: 'desc' } });
+  res.json(c);
 });
-
 app.post('/api/calculadora', authenticateToken, async (req, res) => {
   const { nome, custos } = req.body;
-  if (!nome || !custos) {
-    return res.status(400).json({ error: "Nome e objeto de custos são obrigatórios." });
-  }
+  const n = await prisma.calculadoraSalva.create({ data: { nome, custos } });
+  res.status(201).json(n);
+});
+app.delete('/api/calculadora/:id', authenticateToken, async (req, res) => {
+  await prisma.calculadoraSalva.delete({ where: { id: req.params.id } });
+  res.status(204).send();
+});
+
+// ------------------------------------------------------------------
+// --- MÓDULO NFE: ROTAS ADICIONADAS ---
+// ------------------------------------------------------------------
+
+// 1. EMITENTES
+app.get('/api/nfe/emitentes', authenticateToken, async (req, res) => {
   try {
-    const novoCalculo = await prisma.calculadoraSalva.create({
-      data: {
-        nome,
-        custos
-      }
-    });
-    res.status(201).json(novoCalculo);
+    const emitentes = await prisma.nfeEmitente.findMany({ orderBy: { razaoSocial: 'asc' } });
+    res.json(emitentes);
   } catch (error) {
-    console.error("Create Calculadora error:", error);
-    res.status(500).json({ error: 'Erro ao salvar cálculo.' });
+    res.status(500).json({ error: 'Erro ao buscar emitentes.' });
   }
 });
 
-app.delete('/api/calculadora/:id', authenticateToken, async (req, res) => {
+app.post('/api/nfe/emitentes', authenticateToken, async (req, res) => {
+  const { id, ...data } = req.body;
   try {
-    await prisma.calculadoraSalva.delete({ where: { id: req.params.id } });
+    if (id) {
+        const updated = await prisma.nfeEmitente.upsert({ 
+            where: { id },
+            update: data,
+            create: { ...data, id }
+        });
+        return res.json(updated);
+    }
+    const created = await prisma.nfeEmitente.create({ data });
+    res.status(201).json(created);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Erro ao salvar emitente.' });
+  }
+});
+
+app.delete('/api/nfe/emitentes/:id', authenticateToken, async (req, res) => {
+  try {
+    await prisma.nfeEmitente.delete({ where: { id: req.params.id } });
     res.status(204).send();
   } catch (error) {
-    console.error("Delete Calculadora error:", error);
-    res.status(500).json({ error: 'Erro ao deletar cálculo.' });
+    res.status(500).json({ error: 'Erro ao excluir emitente.' });
+  }
+});
+
+// 2. DESTINATÁRIOS
+app.get('/api/nfe/destinatarios', authenticateToken, async (req, res) => {
+  try {
+    const dest = await prisma.nfeDestinatario.findMany({ orderBy: { razaoSocial: 'asc' } });
+    res.json(dest);
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao buscar destinatários.' });
+  }
+});
+
+app.post('/api/nfe/destinatarios', authenticateToken, async (req, res) => {
+  const { id, ...data } = req.body;
+  try {
+    if (id) {
+        const updated = await prisma.nfeDestinatario.upsert({ 
+            where: { id },
+            update: data,
+            create: { ...data, id }
+        });
+        return res.json(updated);
+    }
+    const created = await prisma.nfeDestinatario.create({ data });
+    res.status(201).json(created);
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao salvar destinatário.' });
+  }
+});
+
+app.delete('/api/nfe/destinatarios/:id', authenticateToken, async (req, res) => {
+  try {
+    await prisma.nfeDestinatario.delete({ where: { id: req.params.id } });
+    res.status(204).send();
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao excluir destinatário.' });
+  }
+});
+
+// 3. PRODUTOS (CATÁLOGO)
+app.get('/api/nfe/produtos', authenticateToken, async (req, res) => {
+  try {
+    const prods = await prisma.nfeProduto.findMany({ orderBy: { descricao: 'asc' } });
+    res.json(prods);
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao buscar produtos.' });
+  }
+});
+
+app.post('/api/nfe/produtos', authenticateToken, async (req, res) => {
+  const { id, ...data } = req.body;
+  try {
+    if (id) {
+        const updated = await prisma.nfeProduto.upsert({
+            where: { id },
+            update: data,
+            create: { ...data, id }
+        });
+        return res.json(updated);
+    }
+    const created = await prisma.nfeProduto.create({ data });
+    res.status(201).json(created);
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao salvar produto.' });
+  }
+});
+
+app.delete('/api/nfe/produtos/:id', authenticateToken, async (req, res) => {
+  try {
+    await prisma.nfeProduto.delete({ where: { id: req.params.id } });
+    res.status(204).send();
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao excluir produto.' });
+  }
+});
+
+// 4. NOTAS FISCAIS (DOCUMENTOS)
+app.get('/api/nfe/notas', authenticateToken, async (req, res) => {
+  try {
+    const notas = await prisma.nfeDocumento.findMany({ orderBy: { createdAt: 'desc' } });
+    const mappedNotas = notas.map(n => {
+        const base = n.fullData || {};
+        return {
+            ...base, 
+            id: n.id,
+            status: n.status,
+            chaveAcesso: n.chaveAcesso,
+            xmlAssinado: n.xmlAssinado,
+            dataEmissao: n.dataEmissao ? n.dataEmissao.toISOString().split('T')[0] : base.dataEmissao
+        };
+    });
+    res.json(mappedNotas);
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao buscar notas fiscais.' });
+  }
+});
+
+app.post('/api/nfe/notas', authenticateToken, async (req, res) => {
+  const invoiceData = req.body;
+  try {
+    if (invoiceData.id) {
+      const existing = await prisma.nfeDocumento.findUnique({ where: { id: invoiceData.id } });
+      if (existing) {
+          const updated = await prisma.nfeDocumento.update({
+            where: { id: invoiceData.id },
+            data: {
+                numero: invoiceData.numero,
+                serie: invoiceData.serie,
+                chaveAcesso: invoiceData.chaveAcesso,
+                status: invoiceData.status || 'draft',
+                xmlAssinado: invoiceData.xmlAssinado,
+                dataEmissao: new Date(invoiceData.dataEmissao),
+                emitenteCnpj: invoiceData.emitente?.cnpj,
+                fullData: invoiceData
+            }
+          });
+          return res.json({ ...invoiceData, id: updated.id });
+      }
+    }
+
+    const created = await prisma.nfeDocumento.create({
+      data: {
+        id: invoiceData.id,
+        numero: invoiceData.numero,
+        serie: invoiceData.serie,
+        chaveAcesso: invoiceData.chaveAcesso,
+        status: invoiceData.status || 'draft',
+        xmlAssinado: invoiceData.xmlAssinado,
+        dataEmissao: new Date(invoiceData.dataEmissao),
+        emitenteCnpj: invoiceData.emitente?.cnpj,
+        fullData: invoiceData
+      }
+    });
+    res.status(201).json({ ...invoiceData, id: created.id });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Erro ao salvar nota fiscal.' });
+  }
+});
+
+app.delete('/api/nfe/notas/:id', authenticateToken, async (req, res) => {
+  try {
+    await prisma.nfeDocumento.delete({ where: { id: req.params.id } });
+    res.status(204).send();
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao excluir nota fiscal.' });
   }
 });
 
