@@ -57,14 +57,14 @@ model LicitacaoDetalhada {
 }
 
 model EventoCalendarioDetalhado {
-  id          String   @id @default(cuid())
-  start       String
-  title       String
-  city        String
-  bid_number  String
-  time        String?
-  location    String?
-  description String?
+  id                  String  @id @default(cuid())
+  start               String
+  title               String
+  city                String
+  bid_number          String
+  time                String?
+  location            String?
+  description         String?
   documentationStatus String? @default("PENDENTE")
 
   @@map("eventos_calendario")
@@ -131,8 +131,8 @@ model Empenho {
   notaFiscalPDF   Json?
   edital          Edital  @relation(fields: [editalId], references: [id], onDelete: Cascade)
   editalId        String
-  statusPagamento String?   @default("PENDENTE")
-  dataPagamento   String?  
+  statusPagamento String? @default("PENDENTE")
+  dataPagamento   String?
 
   @@map("empenhos")
 }
@@ -148,7 +148,7 @@ model SimulacaoSalva {
 }
 
 model SimulacaoItem {
-  id            Int             @id @default(autoincrement())
+  id            Int            @id @default(autoincrement())
   itemIndex     Int
   descricao     String
   marca         String?
@@ -156,7 +156,7 @@ model SimulacaoItem {
   quantidade    Float
   valorUnitario Float
   valorTotal    Float
-  simulacao     SimulacaoSalva  @relation(fields: [simulacaoId], references: [id], onDelete: Cascade)
+  simulacao     SimulacaoSalva @relation(fields: [simulacaoId], references: [id], onDelete: Cascade)
   simulacaoId   String
 
   @@map("simulacoes_itens")
@@ -214,16 +214,16 @@ model ValorReferencia {
 }
 
 model SimulacaoCotacaoSalva {
-  id    String                  @id @default(cuid())
+  id    String                 @id @default(cuid())
   nome  String
-  data  DateTime                @default(now())
+  data  DateTime               @default(now())
   itens SimulacaoCotacaoItem[]
 
   @@map("simulacoes_cotacoes_salvas")
 }
 
 model SimulacaoCotacaoItem {
-  id                 Int                    @id @default(autoincrement())
+  id                 Int                   @id @default(autoincrement())
   produto            String
   unidade            String
   quantidade         Float
@@ -233,7 +233,7 @@ model SimulacaoCotacaoItem {
   origemCotacaoId    String
   origemCotacaoLocal String
   origemCotacaoData  String
-  simulacao          SimulacaoCotacaoSalva  @relation(fields: [simulacaoId], references: [id], onDelete: Cascade)
+  simulacao          SimulacaoCotacaoSalva @relation(fields: [simulacaoId], references: [id], onDelete: Cascade)
   simulacaoId        String
 
   @@map("simulacoes_cotacoes_itens")
@@ -258,8 +258,8 @@ model NfeEmitente {
   razaoSocial       String
   inscricaoEstadual String?
   email             String?
-  crt               String   // 1=Simples, 3=Normal
-  endereco          Json     // { logradouro, numero, bairro, municipio, uf, cep, codigoIbge }
+  crt               String // 1=Simples, 3=Normal
+  endereco          Json // { logradouro, numero, bairro, municipio, uf, cep, codigoIbge }
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
@@ -268,11 +268,11 @@ model NfeEmitente {
 
 model NfeDestinatario {
   id                String   @id @default(cuid())
-  cnpj              String   // Não é unique pois pode haver filiais ou repetição em contextos diferentes, mas geralmente é unique. Deixei aberto.
+  cnpj              String // Não é unique pois pode haver filiais ou repetição em contextos diferentes
   razaoSocial       String
   inscricaoEstadual String?
   email             String?
-  endereco          Json     // { logradouro, numero, bairro, municipio, uf, cep, codigoIbge }
+  endereco          Json // { logradouro, numero, bairro, municipio, uf, cep, codigoIbge }
   createdAt         DateTime @default(now())
 
   @@map("nfe_destinatarios")
@@ -287,29 +287,40 @@ model NfeProduto {
   unidade       String
   valorUnitario Float
   gtin          String?
-  tax           Json     // { origem, cst, aliquotas... } - Armazena toda a regra tributária
+  tax           Json // { origem, cst, aliquotas... }
   createdAt     DateTime @default(now())
 
   @@map("nfe_produtos")
 }
 
 model NfeDocumento {
-  id              String   @id @default(cuid())
-  numero          String
-  serie           String
-  chaveAcesso     String?
-  status          String   // draft, authorized, cancelled, error
-  xmlAssinado     String?  @db.Text
-  dataEmissao     DateTime @default(now())
+  id           String   @id @default(cuid())
+  numero       String
+  serie        String
+  chaveAcesso  String?
+  status       String // draft, authorized, cancelled, error
+  xmlAssinado  String?  @db.Text
+  dataEmissao  DateTime @default(now())
   
-  // Armazena o snapshot completo da nota (emitente, dest, produtos no momento da emissão)
-  fullData        Json     
+  // Armazena o snapshot completo da nota
+  fullData     Json
   
-  // Relacionamento opcional para saber qual empresa emitiu (para filtros)
-  emitenteCnpj    String?
+  // Relacionamento opcional para saber qual empresa emitiu
+  emitenteCnpj String?
 
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   @@map("nfe_documentos")
+}
+
+//
+// ===== CONFIGURAÇÕES GLOBAIS =====
+//
+
+model SystemSettings {
+  id         String  @id // Usaremos um ID fixo como 'global'
+  nfeEnabled Boolean @default(true)
+
+  @@map("system_settings")
 }
