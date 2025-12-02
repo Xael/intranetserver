@@ -76,6 +76,49 @@ app.get('/api/health', (req, res) => {
   res.status(200).json({ status: 'ok', message: 'Server is running' });
 });
 
+// --- CONFIGURAÇÕES DO SISTEMA (GLOBAL) ---
+app.get('/api/settings', authenticateToken, async (req, res) => {
+  try {
+    // Tenta buscar a configuração global. Se não existir, cria o padrão.
+    let settings = await prisma.systemSettings.findUnique({ where: { id: 'global' } });
+    
+    if (!settings) {
+      settings = await prisma.systemSettings.create({
+        data: {
+          id: 'global',
+          nfeEnabled: true // Padrão ligado
+        }
+      });
+    }
+    res.json(settings);
+  } catch (error) {
+    console.error("Erro ao buscar configurações:", error);
+    res.status(500).json({ error: "Erro ao buscar configurações do sistema." });
+  }
+});
+
+app.put('/api/settings', authenticateToken, async (req, res) => {
+  try {
+    // Apenas ADMIN pode alterar configurações globais
+    if (req.user.role !== 'ADMIN') {
+        return res.status(403).json({ error: "Acesso negado. Apenas administradores podem alterar configurações do sistema." });
+    }
+
+    const { nfeEnabled } = req.body;
+    
+    const settings = await prisma.systemSettings.upsert({
+      where: { id: 'global' },
+      update: { nfeEnabled },
+      create: { id: 'global', nfeEnabled }
+    });
+    
+    res.json(settings);
+  } catch (error) {
+    console.error("Erro ao atualizar configurações:", error);
+    res.status(500).json({ error: "Erro ao atualizar configurações." });
+  }
+});
+
 // --- GERENCIAMENTO DE USUÁRIOS ---
 app.get('/api/users', authenticateToken, async (req, res) => {
   try {
