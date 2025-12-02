@@ -26,10 +26,9 @@ enum Role {
 }
 
 //
-// ===== MODELS =====
+// ===== MODELS EXISTENTES =====
 //
 
-// --- USUÁRIOS (autenticação / perfis) ---
 model User {
   id           String   @id @default(cuid())
   username     String   @unique
@@ -42,7 +41,6 @@ model User {
   @@map("users")
 }
 
-// --- LICITAÇÕES DETALHADAS ---
 model LicitacaoDetalhada {
   id               String                   @id @default(cuid())
   city             String
@@ -58,7 +56,6 @@ model LicitacaoDetalhada {
   @@map("licitacoes_detalhadas")
 }
 
-// --- CALENDÁRIO ---
 model EventoCalendarioDetalhado {
   id          String   @id @default(cuid())
   start       String
@@ -73,7 +70,6 @@ model EventoCalendarioDetalhado {
   @@map("eventos_calendario")
 }
 
-// --- CONTROLE DE MATERIAIS ---
 model Municipio {
   id      String   @id @default(cuid())
   nome    String   @unique
@@ -135,13 +131,12 @@ model Empenho {
   notaFiscalPDF   Json?
   edital          Edital  @relation(fields: [editalId], references: [id], onDelete: Cascade)
   editalId        String
-  statusPagamento String?   @default("PENDENTE") // Novo Campo
+  statusPagamento String?   @default("PENDENTE")
   dataPagamento   String?  
 
   @@map("empenhos")
 }
 
-// --- SIMULAÇÕES DE MATERIAIS ---
 model SimulacaoSalva {
   id        String          @id @default(cuid())
   data      DateTime        @default(now())
@@ -167,7 +162,6 @@ model SimulacaoItem {
   @@map("simulacoes_itens")
 }
 
-// --- EPI (entregas) ---
 model EPIEntrega {
   id          String @id @default(cuid())
   funcionario String
@@ -178,7 +172,6 @@ model EPIEntrega {
   @@map("epi_entregas")
 }
 
-// --- EPI (estoque) ---
 model EPIEstoqueItem {
   id           String  @id @default(cuid())
   name         String  @unique
@@ -189,7 +182,6 @@ model EPIEstoqueItem {
   @@map("epi_estoque_itens")
 }
 
-// --- COTAÇÕES ---
 model Cotacao {
   id    String        @id @default(cuid())
   local String
@@ -213,7 +205,6 @@ model CotacaoItem {
   @@map("cotacao_itens")
 }
 
-// --- VALORES DE REFERÊNCIA DAS COTAÇÕES ---
 model ValorReferencia {
   id      String @id
   produto String
@@ -222,7 +213,6 @@ model ValorReferencia {
   @@map("valores_referencia")
 }
 
-// --- SIMULAÇÕES DE COTAÇÃO ---
 model SimulacaoCotacaoSalva {
   id    String                  @id @default(cuid())
   nome  String
@@ -249,7 +239,6 @@ model SimulacaoCotacaoItem {
   @@map("simulacoes_cotacoes_itens")
 }
 
-// --- CALCULADORA ---
 model CalculadoraSalva {
   id     String   @id @default(cuid())
   nome   String
@@ -259,4 +248,68 @@ model CalculadoraSalva {
   @@map("calculadora_salva")
 }
 
+//
+// ===== NOVOS MODELS: EMISSOR DE NFE =====
+//
 
+model NfeEmitente {
+  id                String   @id @default(cuid())
+  cnpj              String   @unique
+  razaoSocial       String
+  inscricaoEstadual String?
+  email             String?
+  crt               String   // 1=Simples, 3=Normal
+  endereco          Json     // { logradouro, numero, bairro, municipio, uf, cep, codigoIbge }
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@map("nfe_emitentes")
+}
+
+model NfeDestinatario {
+  id                String   @id @default(cuid())
+  cnpj              String   // Não é unique pois pode haver filiais ou repetição em contextos diferentes, mas geralmente é unique. Deixei aberto.
+  razaoSocial       String
+  inscricaoEstadual String?
+  email             String?
+  endereco          Json     // { logradouro, numero, bairro, municipio, uf, cep, codigoIbge }
+  createdAt         DateTime @default(now())
+
+  @@map("nfe_destinatarios")
+}
+
+model NfeProduto {
+  id            String   @id @default(cuid())
+  codigo        String
+  descricao     String
+  ncm           String
+  cfop          String
+  unidade       String
+  valorUnitario Float
+  gtin          String?
+  tax           Json     // { origem, cst, aliquotas... } - Armazena toda a regra tributária
+  createdAt     DateTime @default(now())
+
+  @@map("nfe_produtos")
+}
+
+model NfeDocumento {
+  id              String   @id @default(cuid())
+  numero          String
+  serie           String
+  chaveAcesso     String?
+  status          String   // draft, authorized, cancelled, error
+  xmlAssinado     String?  @db.Text
+  dataEmissao     DateTime @default(now())
+  
+  // Armazena o snapshot completo da nota (emitente, dest, produtos no momento da emissão)
+  fullData        Json     
+  
+  // Relacionamento opcional para saber qual empresa emitiu (para filtros)
+  emitenteCnpj    String?
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("nfe_documentos")
+}
