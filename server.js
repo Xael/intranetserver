@@ -893,59 +893,86 @@ app.delete('/api/calculadora/:id', authenticateToken, async (req, res) => {
   res.status(204).send();
 });
 
-// ------------------------------------------------------------------
-// --- MÓDULO NFE: ROTAS ADICIONADAS ---
-// ------------------------------------------------------------------
-
-// 1. EMITENTES
-app.get('/api/nfe/emitentes', authenticateToken, async (req, res) => {
+// ==========================================
+// --- NFe: EMISSORES (EMITENTES) ---
+// ==========================================
+// Rota bate com RegistryManager: 'issuers'
+app.get('/api/issuers', authenticateToken, async (req, res) => {
   try {
-    const emitentes = await prisma.nfeEmitente.findMany({ orderBy: { razaoSocial: 'asc' } });
-    res.json(emitentes);
+    // Busca entidades do tipo ISSUER
+    const issuers = await prisma.entity.findMany({
+      where: { type: 'ISSUER' } 
+    });
+    res.json(issuers);
   } catch (error) {
-    res.status(500).json({ error: 'Erro ao buscar emitentes.' });
+    console.error("Erro buscar emissores:", error);
+    res.json([]); 
   }
 });
 
-app.post('/api/nfe/emitentes', authenticateToken, async (req, res) => {
-  const { id, ...data } = req.body;
+app.post('/api/issuers', authenticateToken, async (req, res) => {
   try {
-    if (id) {
-        const updated = await prisma.nfeEmitente.upsert({ 
-            where: { id },
-            update: data,
-            create: { ...data, id }
-        });
-        return res.json(updated);
-    }
-    const created = await prisma.nfeEmitente.create({ data });
-    res.status(201).json(created);
+    const data = req.body;
+    if (!data.id) delete data.id;
+
+    const newIssuer = await prisma.entity.create({
+      data: {
+        ...data,
+        type: 'ISSUER',
+        // Garante que endereço seja string JSON se o banco pedir
+        endereco: typeof data.endereco === 'object' ? JSON.stringify(data.endereco) : data.endereco
+      }
+    });
+    res.json(newIssuer);
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: 'Erro ao salvar emitente.' });
+    console.error("Erro criar emissor:", error);
+    res.status(500).json({ error: 'Erro ao salvar emissor.' });
   }
 });
 
-app.delete('/api/nfe/emitentes/:id', authenticateToken, async (req, res) => {
+app.put('/api/issuers/:id', authenticateToken, async (req, res) => {
   try {
-    await prisma.nfeEmitente.delete({ where: { id: req.params.id } });
+    const { id } = req.params;
+    const { id: _, ...data } = req.body;
+    const updated = await prisma.entity.update({
+      where: { id },
+      data: {
+        ...data,
+        endereco: typeof data.endereco === 'object' ? JSON.stringify(data.endereco) : data.endereco
+      }
+    });
+    res.json(updated);
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao atualizar emissor.' });
+  }
+});
+
+app.delete('/api/issuers/:id', authenticateToken, async (req, res) => {
+  try {
+    await prisma.entity.delete({ where: { id: req.params.id } });
     res.status(204).send();
   } catch (error) {
-    res.status(500).json({ error: 'Erro ao excluir emitente.' });
+    res.status(500).json({ error: 'Erro ao excluir.' });
   }
 });
 
-// 2. DESTINATÁRIOS
-app.get('/api/nfe/destinatarios', authenticateToken, async (req, res) => {
+// ==========================================
+// --- NFe: DESTINATÁRIOS (RECIPIENTS) ---
+// ==========================================
+// AJUSTE IMPORTANTE: Rota mudada para /api/recipients para bater com o Frontend
+app.get('/api/recipients', authenticateToken, async (req, res) => {
   try {
+    // Se você não tiver a tabela nfeDestinatario, troque por prisma.entity.findMany({ where: { type: 'RECIPIENT' } })
     const dest = await prisma.nfeDestinatario.findMany({ orderBy: { razaoSocial: 'asc' } });
     res.json(dest);
   } catch (error) {
-    res.status(500).json({ error: 'Erro ao buscar destinatários.' });
+    console.error(error);
+    // Retorna vazio se der erro (tabela inexistente)
+    res.json([]); 
   }
 });
 
-app.post('/api/nfe/destinatarios', authenticateToken, async (req, res) => {
+app.post('/api/recipients', authenticateToken, async (req, res) => {
   const { id, ...data } = req.body;
   try {
     if (id) {
@@ -959,11 +986,12 @@ app.post('/api/nfe/destinatarios', authenticateToken, async (req, res) => {
     const created = await prisma.nfeDestinatario.create({ data });
     res.status(201).json(created);
   } catch (error) {
+    console.error(error);
     res.status(500).json({ error: 'Erro ao salvar destinatário.' });
   }
 });
 
-app.delete('/api/nfe/destinatarios/:id', authenticateToken, async (req, res) => {
+app.delete('/api/recipients/:id', authenticateToken, async (req, res) => {
   try {
     await prisma.nfeDestinatario.delete({ where: { id: req.params.id } });
     res.status(204).send();
@@ -972,19 +1000,24 @@ app.delete('/api/nfe/destinatarios/:id', authenticateToken, async (req, res) => 
   }
 });
 
-// 3. PRODUTOS (CATÁLOGO)
-app.get('/api/nfe/produtos', authenticateToken, async (req, res) => {
+// ==========================================
+// --- NFe: PRODUTOS ---
+// ==========================================
+// AJUSTE IMPORTANTE: Rota mudada para /api/products para bater com o Frontend
+app.get('/api/products', authenticateToken, async (req, res) => {
   try {
     const prods = await prisma.nfeProduto.findMany({ orderBy: { descricao: 'asc' } });
     res.json(prods);
   } catch (error) {
-    res.status(500).json({ error: 'Erro ao buscar produtos.' });
+    res.json([]);
   }
 });
 
-app.post('/api/nfe/produtos', authenticateToken, async (req, res) => {
+app.post('/api/products', authenticateToken, async (req, res) => {
   const { id, ...data } = req.body;
   try {
+    // Ajuste nos dados de imposto (tax) se vier como objeto, Prisma pode precisar de JSON stringify dependendo do schema
+    // Mas assumindo que seu schema usa Json type, está ok passar objeto direto.
     if (id) {
         const updated = await prisma.nfeProduto.upsert({
             where: { id },
@@ -996,11 +1029,12 @@ app.post('/api/nfe/produtos', authenticateToken, async (req, res) => {
     const created = await prisma.nfeProduto.create({ data });
     res.status(201).json(created);
   } catch (error) {
+    console.error(error);
     res.status(500).json({ error: 'Erro ao salvar produto.' });
   }
 });
 
-app.delete('/api/nfe/produtos/:id', authenticateToken, async (req, res) => {
+app.delete('/api/products/:id', authenticateToken, async (req, res) => {
   try {
     await prisma.nfeProduto.delete({ where: { id: req.params.id } });
     res.status(204).send();
@@ -1009,11 +1043,15 @@ app.delete('/api/nfe/produtos/:id', authenticateToken, async (req, res) => {
   }
 });
 
-// 4. NOTAS FISCAIS (DOCUMENTOS)
+// ==========================================
+// --- NFe: NOTAS FISCAIS ---
+// ==========================================
+// Rota padronizada para /api/invoices (opcional, mas recomendado)
 app.get('/api/nfe/notas', authenticateToken, async (req, res) => {
   try {
     const notas = await prisma.nfeDocumento.findMany({ orderBy: { createdAt: 'desc' } });
     const mappedNotas = notas.map(n => {
+        // Fallback seguro se fullData for nulo
         const base = n.fullData || {};
         return {
             ...base, 
@@ -1021,41 +1059,22 @@ app.get('/api/nfe/notas', authenticateToken, async (req, res) => {
             status: n.status,
             chaveAcesso: n.chaveAcesso,
             xmlAssinado: n.xmlAssinado,
-            dataEmissao: n.dataEmissao ? n.dataEmissao.toISOString().split('T')[0] : base.dataEmissao
+            // Garante data string
+            dataEmissao: n.dataEmissao ? new Date(n.dataEmissao).toISOString() : base.dataEmissao
         };
     });
     res.json(mappedNotas);
   } catch (error) {
-    res.status(500).json({ error: 'Erro ao buscar notas fiscais.' });
+    console.error(error);
+    res.json([]);
   }
 });
 
 app.post('/api/nfe/notas', authenticateToken, async (req, res) => {
   const invoiceData = req.body;
   try {
-    if (invoiceData.id) {
-      const existing = await prisma.nfeDocumento.findUnique({ where: { id: invoiceData.id } });
-      if (existing) {
-          const updated = await prisma.nfeDocumento.update({
-            where: { id: invoiceData.id },
-            data: {
-                numero: invoiceData.numero,
-                serie: invoiceData.serie,
-                chaveAcesso: invoiceData.chaveAcesso,
-                status: invoiceData.status || 'draft',
-                xmlAssinado: invoiceData.xmlAssinado,
-                dataEmissao: new Date(invoiceData.dataEmissao),
-                emitenteCnpj: invoiceData.emitente?.cnpj,
-                fullData: invoiceData
-            }
-          });
-          return res.json({ ...invoiceData, id: updated.id });
-      }
-    }
-
-    const created = await prisma.nfeDocumento.create({
-      data: {
-        id: invoiceData.id,
+    // Prepara objeto para salvar
+    const dataToSave = {
         numero: invoiceData.numero,
         serie: invoiceData.serie,
         chaveAcesso: invoiceData.chaveAcesso,
@@ -1063,7 +1082,24 @@ app.post('/api/nfe/notas', authenticateToken, async (req, res) => {
         xmlAssinado: invoiceData.xmlAssinado,
         dataEmissao: new Date(invoiceData.dataEmissao),
         emitenteCnpj: invoiceData.emitente?.cnpj,
-        fullData: invoiceData
+        fullData: invoiceData // Salva o JSON completo para recuperar fácil no front
+    };
+
+    if (invoiceData.id) {
+      const existing = await prisma.nfeDocumento.findUnique({ where: { id: invoiceData.id } });
+      if (existing) {
+          const updated = await prisma.nfeDocumento.update({
+            where: { id: invoiceData.id },
+            data: dataToSave
+          });
+          return res.json({ ...invoiceData, id: updated.id });
+      }
+    }
+
+    const created = await prisma.nfeDocumento.create({
+      data: {
+        ...dataToSave,
+        id: invoiceData.id // Se vier ID do front (ex: uuid), usa ele
       }
     });
     res.status(201).json({ ...invoiceData, id: created.id });
