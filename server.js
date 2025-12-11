@@ -289,70 +289,62 @@ app.post('/api/restore-bids-backup', authenticateToken, async (req, res) => {
   }
 });
 
-// --- CALENDÁRIO ---
+// ==========================================
+// --- CALENDÁRIO (Rotas Corrigidas) ---
+// ==========================================
 
-// POST /api/events
-app.post('/api/events', authenticateToken, async (req, res) => {
-  try {
-    const { id, ...data } = req.body;
-    const newEvent = await prisma.eventoCalendarioDetalhado.create({
-      data: {
-        ...data,
-        documentationStatus: data.documentationStatus || 'PENDENTE',
-      },
-    });
-    res.status(201).json(newEvent);
-  } catch (error) {
-    console.error("Create Event error:", error);
-    res.status(500).json({ error: 'Erro ao criar evento.' });
-  }
-});
-
-// PUT /api/events/:id
-app.put('/api/events/:id', authenticateToken, async (req, res) => {
-  try {
-    const { id, ...data } = req.body;
-    const updatedEvent = await prisma.eventoCalendarioDetalhado.update({
-      where: { id: req.params.id },
-      data: {
-        ...data,
-        documentationStatus: data.documentationStatus || 'PENDENTE',
-      },
-    });
-    res.json(updatedEvent);
-  } catch (error) {
-    console.error("Update Event error:", error);
-    res.status(500).json({ error: 'Erro ao atualizar evento.' });
-  }
-});
-
+// GET: Buscar eventos
 app.get('/api/events', authenticateToken, async (req, res) => {
   try {
     const events = await prisma.eventoCalendarioDetalhado.findMany();
-    res.json(events);
+    // O frontend espera "date" ou "start", o banco tem "start".
+    // Vamos garantir que o frontend receba o que precisa.
+    const formatted = events.map(e => ({
+        ...e,
+        date: e.start // Cria o alias que o frontend antigo pode estar esperando
+    }));
+    res.json(formatted);
   } catch (error) {
     console.error("Get Events error:", error);
     res.status(500).json({ error: 'Erro ao buscar eventos.' });
   }
 });
 
+// POST: Criar evento
 app.post('/api/events', authenticateToken, async (req, res) => {
   try {
-    const { id, ...data } = req.body;
-    const newEvent = await prisma.eventoCalendarioDetalhado.create({ data });
+    // AQUI ESTAVA O ERRO: O front manda 'date', mas o banco não tem essa coluna.
+    // Usamos desestruturação para remover 'id' e 'date' do objeto antes de salvar.
+    const { id, date, ...data } = req.body;
+
+    const newEvent = await prisma.eventoCalendarioDetalhado.create({
+      data: {
+        ...data,
+        // Garante que o status tenha valor padrão se vier vazio
+        documentationStatus: data.documentationStatus || 'PENDENTE',
+      },
+    });
     res.status(201).json(newEvent);
   } catch (error) {
     console.error("Create Event error:", error);
-    res.status(500).json({ error: 'Erro ao criar evento.' });
+    // Log detalhado para te ajudar a ver qual campo está falhando
+    res.status(500).json({ error: 'Erro ao criar evento. Verifique se o banco foi atualizado (npx prisma db push).' });
   }
 });
 
+// PUT: Atualizar evento
 app.put('/api/events/:id', authenticateToken, async (req, res) => {
   try {
-    const { id, ...data } = req.body;
+    const { id } = req.params;
+    // Removemos 'id', '_id' e 'date' para evitar conflitos no Prisma
+    const { id: _, _id, date, ...data } = req.body;
+
     const updatedEvent = await prisma.eventoCalendarioDetalhado.update({
-      where: { id: req.params.id },
-      data,
+      where: { id },
+      data: {
+        ...data,
+        documentationStatus: data.documentationStatus || 'PENDENTE',
+      },
     });
     res.json(updatedEvent);
   } catch (error) {
@@ -361,6 +353,7 @@ app.put('/api/events/:id', authenticateToken, async (req, res) => {
   }
 });
 
+// DELETE: Apagar evento
 app.delete('/api/events/:id', authenticateToken, async (req, res) => {
   try {
     await prisma.eventoCalendarioDetalhado.delete({ where: { id: req.params.id } });
@@ -371,23 +364,29 @@ app.delete('/api/events/:id', authenticateToken, async (req, res) => {
   }
 });
 
+// Restore Backup (Opcional, mantido para compatibilidade)
 app.post('/api/events/restore', authenticateToken, async (req, res) => {
   const { events } = req.body;
   if (!Array.isArray(events)) {
-    return res.status(400).json({ error: 'O corpo da requisição deve ser um objeto { events: [] }.' });
+    return res.status(400).json({ error: 'Formato inválido.' });
   }
   try {
     await prisma.$transaction(async (tx) => {
       await tx.eventoCalendarioDetalhado.deleteMany({});
-      const dataToCreate = events.map(({ id, ...rest }) => rest);
+      // Limpa os dados antes de restaurar
+      const dataToCreate = events.map(({ id, date, ...rest }) => ({
+          ...rest,
+          start: rest.start || date // Garante que tenha start
+      }));
+      
       if (dataToCreate.length > 0) {
         await tx.eventoCalendarioDetalhado.createMany({ data: dataToCreate });
       }
     });
-    res.status(200).json({ message: 'Backup do calendário restaurado com sucesso.' });
+    res.status(200).json({ message: 'Backup restaurado.' });
   } catch (error) {
-    console.error("Restore Events error:", error);
-    res.status(500).json({ error: 'Erro ao restaurar o backup do calendário.' });
+    console.error("Restore error:", error);
+    res.status(500).json({ error: 'Erro ao restaurar backup.' });
   }
 });
 
