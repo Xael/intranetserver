@@ -56,6 +56,9 @@ model LicitacaoDetalhada {
   @@map("licitacoes_detalhadas")
 }
 
+// ========================================================
+// AQUI ESTAVA O ERRO: FALTAVAM OS CAMPOS NOVOS
+// ========================================================
 model EventoCalendarioDetalhado {
   id                  String  @id @default(cuid())
   start               String
@@ -66,6 +69,14 @@ model EventoCalendarioDetalhado {
   location            String?
   description         String?
   documentationStatus String? @default("PENDENTE")
+
+  // --- NOVOS CAMPOS QUE FALTAVAM ---
+  estimatedValue String? // <--- NOVO
+  distance       String? // <--- NOVO
+  avgEmployees   String? // <--- NOVO
+  warranty       String? // <--- NOVO
+  editalFile     String? @db.Text // <--- NOVO (Para o PDF Base64)
+  editalFileName String? // <--- NOVO
 
   @@map("eventos_calendario")
 }
@@ -258,7 +269,7 @@ model NfeEmitente {
   razaoSocial       String
   inscricaoEstadual String?
   email             String?
-  crt               String // 1=Simples, 3=Normal
+  crt               String? // 1=Simples, 3=Normal
   endereco          Json // { logradouro, numero, bairro, municipio, uf, cep, codigoIbge }
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
@@ -294,22 +305,22 @@ model NfeProduto {
 }
 
 model NfeDocumento {
-  id           String   @id @default(cuid())
-  numero       String
-  serie        String
-  chaveAcesso  String?
-  status       String // draft, authorized, cancelled, error
-  xmlAssinado  String?  @db.Text
-  dataEmissao  DateTime @default(now())
-  
+  id          String   @id @default(cuid())
+  numero      String
+  serie       String
+  chaveAcesso String?
+  status      String // draft, authorized, cancelled, error
+  xmlAssinado String?  @db.Text
+  dataEmissao DateTime @default(now())
+
   // Armazena o snapshot completo da nota
-  fullData     Json
-  
+  fullData Json
+
   // Relacionamento opcional para saber qual empresa emitiu
   emitenteCnpj String?
 
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@map("nfe_documentos")
 }
