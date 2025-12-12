@@ -1044,13 +1044,38 @@ app.delete('/api/products/:id', authenticateToken, async (req, res) => {
   }
 });
 
+// ==========================================
+// --- NFe: NOTAS FISCAIS (CORRIGIDA E INTELIGENTE) ---
+// ==========================================
+
+app.get('/api/nfe/notas', authenticateToken, async (req, res) => {
+  try {
+    // Ordena por Data de Emissão (mais recente primeiro)
+    const notas = await prisma.nfeDocumento.findMany({ orderBy: { dataEmissao: 'desc' } });
+    const mappedNotas = notas.map(n => {
+        const base = n.fullData || {};
+        return {
+            ...base, 
+            id: n.id,
+            status: n.status,
+            chaveAcesso: n.chaveAcesso,
+            xmlAssinado: n.xmlAssinado,
+            dataEmissao: n.dataEmissao ? new Date(n.dataEmissao).toISOString() : base.dataEmissao
+        };
+    });
+    res.json(mappedNotas);
+  } catch (error) {
+    console.error(error);
+    res.json([]);
+  }
+});
+
 // POST: Salvar Nota (Com Auto-Cadastro e ATUALIZAÇÃO INTELIGENTE via Chave)
 app.post('/api/nfe/notas', authenticateToken, async (req, res) => {
   const invoiceData = req.body;
   try {
     // --- 1. LÓGICA DE AUTO-CADASTRO DE DESTINATÁRIO ---
     if (invoiceData.destinatario && invoiceData.destinatario.cnpj) {
-        // Note que este bloco é async porque a função principal é async
         try {
             const existingDest = await prisma.nfeDestinatario.findFirst({
                 where: { cnpj: invoiceData.destinatario.cnpj }
@@ -1069,9 +1094,8 @@ app.post('/api/nfe/notas', authenticateToken, async (req, res) => {
         } catch (e) { console.error("Auto-cadastro dest falhou (ignorado):", e); }
     }
 
-    // --- 2. LÓGICA DE AUTO-CADASTRO DE PRODUTOS (Usando Promise.all) ---
+    // --- 2. LÓGICA DE AUTO-CADASTRO DE PRODUTOS (CORRIGIDO com Promise.all) ---
     if (invoiceData.produtos && Array.isArray(invoiceData.produtos)) {
-        // Mapeia os produtos para promessas assíncronas e espera que todas terminem
         await Promise.all(invoiceData.produtos.map(async (prod) => {
             try {
                  const existingProd = await prisma.nfeProduto.findFirst({
@@ -1137,64 +1161,6 @@ app.post('/api/nfe/notas', authenticateToken, async (req, res) => {
 
   } catch (error) {
     console.error("Erro fatal na rota POST /api/nfe/notas:", error);
-    res.status(500).json({ error: 'Erro ao salvar nota fiscal.' });
-  }
-});
-    // Salvar Produtos se não existirem
-    if (invoiceData.produtos && Array.isArray(invoiceData.produtos)) {
-        for (const prod of invoiceData.produtos) {
-            try {
-                 const existingProd = await prisma.nfeProduto.findFirst({
-                    where: { codigo: prod.codigo }
-                 });
-                 if (!existingProd) {
-                    await prisma.nfeProduto.create({
-                        data: {
-                            codigo: prod.codigo,
-                            descricao: prod.descricao,
-                            ncm: prod.ncm || '',
-                            cfop: prod.cfop || '',
-                            unidade: prod.unidade,
-                            valorUnitario: parseFloat(prod.valorUnitario) || 0,
-                            gtin: prod.gtin || 'SEM GTIN',
-                            tax: prod.tax || {}
-                        }
-                    });
-                 }
-            } catch (e) { console.error("Auto-cadastro prod falhou (ignorado):", e); }
-        }
-    }
-
-    // --- 2. SALVAR A NOTA ---
-    const dataToSave = {
-        numero: invoiceData.numero,
-        serie: invoiceData.serie,
-        chaveAcesso: invoiceData.chaveAcesso,
-        status: invoiceData.status || 'draft',
-        xmlAssinado: invoiceData.xmlAssinado,
-        dataEmissao: new Date(invoiceData.dataEmissao),
-        emitenteCnpj: invoiceData.emitente?.cnpj,
-        fullData: invoiceData 
-    };
-
-    if (invoiceData.id) {
-      const existing = await prisma.nfeDocumento.findUnique({ where: { id: invoiceData.id } });
-      if (existing) {
-          const updated = await prisma.nfeDocumento.update({
-            where: { id: invoiceData.id },
-            data: dataToSave
-          });
-          return res.json({ ...invoiceData, id: updated.id });
-      }
-    }
-
-    const created = await prisma.nfeDocumento.create({
-      data: { ...dataToSave, id: invoiceData.id }
-    });
-    res.status(201).json({ ...invoiceData, id: created.id });
-
-  } catch (error) {
-    console.error(error);
     res.status(500).json({ error: 'Erro ao salvar nota fiscal.' });
   }
 });
