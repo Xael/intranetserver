@@ -1094,9 +1094,12 @@ app.post('/api/nfe/notas', authenticateToken, async (req, res) => {
         } catch (e) { console.error("Auto-cadastro dest falhou (ignorado):", e); }
     }
 
-    // --- 2. LÓGICA DE AUTO-CADASTRO DE PRODUTOS ---
+// --- 2. LÓGICA DE AUTO-CADASTRO DE PRODUTOS (CORRIGIDA) ---
     if (invoiceData.produtos && Array.isArray(invoiceData.produtos)) {
-        for (const prod of invoiceData.produtos) {
+        
+        // Usamos Promise.all(map(async ...)) para garantir que cada await esteja dentro
+        // de um contexto async válido, evitando o erro de sintaxe.
+        await Promise.all(invoiceData.produtos.map(async (prod) => {
             try {
                  const existingProd = await prisma.nfeProduto.findFirst({
                     where: { codigo: prod.codigo }
@@ -1116,7 +1119,7 @@ app.post('/api/nfe/notas', authenticateToken, async (req, res) => {
                     });
                  }
             } catch (e) { console.error("Auto-cadastro prod falhou (ignorado):", e); }
-        }
+        }));
     }
 
     // --- 3. PREPARAÇÃO DOS DADOS DA NOTA ---
