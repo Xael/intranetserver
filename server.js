@@ -1070,12 +1070,11 @@ app.get('/api/nfe/notas', authenticateToken, async (req, res) => {
   }
 });
 
+// POST: Salvar Nota (Com Auto-Cadastro e ATUALIZAÇÃO INTELIGENTE via Chave)
 app.post('/api/nfe/notas', authenticateToken, async (req, res) => {
   const invoiceData = req.body;
   try {
-    // --- 1. LÓGICA DE AUTO-CADASTRO (Isso estava faltando no seu código antigo) ---
-    
-    // Salvar Destinatário se não existir
+    // --- 1. LÓGICA DE AUTO-CADASTRO DE DESTINATÁRIO ---
     if (invoiceData.destinatario && invoiceData.destinatario.cnpj) {
         try {
             const existingDest = await prisma.nfeDestinatario.findFirst({
@@ -1094,6 +1093,80 @@ app.post('/api/nfe/notas', authenticateToken, async (req, res) => {
             }
         } catch (e) { console.error("Auto-cadastro dest falhou (ignorado):", e); }
     }
+
+    // --- 2. LÓGICA DE AUTO-CADASTRO DE PRODUTOS ---
+    if (invoiceData.produtos && Array.isArray(invoiceData.produtos)) {
+        for (const prod of invoiceData.produtos) {
+            try {
+                 const existingProd = await prisma.nfeProduto.findFirst({
+                    where: { codigo: prod.codigo }
+                 });
+                 if (!existingProd) {
+                    await prisma.nfeProduto.create({
+                        data: {
+                            codigo: prod.codigo,
+                            descricao: prod.descricao,
+                            ncm: prod.ncm || '',
+                            cfop: prod.cfop || '',
+                            unidade: prod.unidade,
+                            valorUnitario: parseFloat(prod.valorUnitario) || 0,
+                            gtin: prod.gtin || 'SEM GTIN',
+                            tax: prod.tax || {}
+                        }
+                    });
+                 }
+            } catch (e) { console.error("Auto-cadastro prod falhou (ignorado):", e); }
+        }
+    }
+
+    // --- 3. PREPARAÇÃO DOS DADOS DA NOTA ---
+    const dataToSave = {
+        numero: invoiceData.numero,
+        serie: invoiceData.serie,
+        chaveAcesso: invoiceData.chaveAcesso,
+        status: invoiceData.status || 'draft',
+        xmlAssinado: invoiceData.xmlAssinado,
+        dataEmissao: new Date(invoiceData.dataEmissao),
+        emitenteCnpj: invoiceData.emitente?.cnpj,
+        fullData: invoiceData 
+    };
+
+    // --- 4. VERIFICAÇÃO INTELIGENTE (UPSERT MANUAL) ---
+    
+    let existingRecord = null;
+
+    // A. Se veio ID explícito (edição manual no sistema)
+    if (invoiceData.id) {
+        existingRecord = await prisma.nfeDocumento.findUnique({ where: { id: invoiceData.id } });
+    } 
+    // B. Se não tem ID, mas tem Chave de Acesso (Importação de XML)
+    else if (invoiceData.chaveAcesso) {
+        existingRecord = await prisma.nfeDocumento.findFirst({ 
+            where: { chaveAcesso: invoiceData.chaveAcesso } 
+        });
+    }
+
+    if (existingRecord) {
+        // ATUALIZA (UPDATE)
+        // Isso permite re-importar uma nota para atualizar status (ex: de Autorizada para Cancelada)
+        const updated = await prisma.nfeDocumento.update({
+            where: { id: existingRecord.id },
+            data: dataToSave
+        });
+        return res.json({ ...invoiceData, id: updated.id });
+    } else {
+        // CRIA (CREATE)
+        const created = await prisma.nfeDocumento.create({
+            data: { ...dataToSave, id: invoiceData.id }
+        });
+        res.status(201).json({ ...invoiceData, id: created.id });
+    }
+
+  } catch (error) {
+    console.error("Erro ao salvar nota:", error);
+    res.status(500).json({ error: 'Erro ao salvar nota fiscal.' });
+  }
+});
 
     // Salvar Produtos se não existirem
     if (invoiceData.produtos && Array.isArray(invoiceData.produtos)) {
