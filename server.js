@@ -897,10 +897,8 @@ app.delete('/api/calculadora/:id', authenticateToken, async (req, res) => {
 // --- NFe: EMISSORES (EMITENTES) ---
 // ==========================================
 
-// GET: Buscar todos os emissores
 app.get('/api/issuers', authenticateToken, async (req, res) => {
   try {
-    // CORREÇÃO: Usar 'nfeEmitente' em vez de 'entity'
     const issuers = await prisma.nfeEmitente.findMany();
     res.json(issuers);
   } catch (error) {
@@ -909,14 +907,11 @@ app.get('/api/issuers', authenticateToken, async (req, res) => {
   }
 });
 
-// POST: Salvar novo emissor
 app.post('/api/issuers', authenticateToken, async (req, res) => {
   try {
     const data = req.body;
-    // Remove ID se vier vazio
     if (!data.id) delete data.id;
 
-    // CORREÇÃO: Usar 'nfeEmitente' e passar endereço direto (sem JSON.stringify)
     const newIssuer = await prisma.nfeEmitente.create({
       data: {
         cnpj: data.cnpj,
@@ -924,7 +919,7 @@ app.post('/api/issuers', authenticateToken, async (req, res) => {
         inscricaoEstadual: data.inscricaoEstadual,
         email: data.email,
         crt: data.crt,
-        endereco: data.endereco, // O Prisma converte automaticamente para o tipo Json
+        endereco: data.endereco,
       }
     });
     res.json(newIssuer);
@@ -934,7 +929,6 @@ app.post('/api/issuers', authenticateToken, async (req, res) => {
   }
 });
 
-// PUT: Atualizar emissor
 app.put('/api/issuers/:id', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
@@ -958,7 +952,6 @@ app.put('/api/issuers/:id', authenticateToken, async (req, res) => {
   }
 });
 
-// DELETE: Excluir emissor
 app.delete('/api/issuers/:id', authenticateToken, async (req, res) => {
   try {
     await prisma.nfeEmitente.delete({ where: { id: req.params.id } });
@@ -971,15 +964,13 @@ app.delete('/api/issuers/:id', authenticateToken, async (req, res) => {
 // ==========================================
 // --- NFe: DESTINATÁRIOS (RECIPIENTS) ---
 // ==========================================
-// AJUSTE IMPORTANTE: Rota mudada para /api/recipients para bater com o Frontend
+
 app.get('/api/recipients', authenticateToken, async (req, res) => {
   try {
-    // Se você não tiver a tabela nfeDestinatario, troque por prisma.entity.findMany({ where: { type: 'RECIPIENT' } })
     const dest = await prisma.nfeDestinatario.findMany({ orderBy: { razaoSocial: 'asc' } });
     res.json(dest);
   } catch (error) {
     console.error(error);
-    // Retorna vazio se der erro (tabela inexistente)
     res.json([]); 
   }
 });
@@ -1015,7 +1006,7 @@ app.delete('/api/recipients/:id', authenticateToken, async (req, res) => {
 // ==========================================
 // --- NFe: PRODUTOS ---
 // ==========================================
-// AJUSTE IMPORTANTE: Rota mudada para /api/products para bater com o Frontend
+
 app.get('/api/products', authenticateToken, async (req, res) => {
   try {
     const prods = await prisma.nfeProduto.findMany({ orderBy: { descricao: 'asc' } });
@@ -1028,8 +1019,6 @@ app.get('/api/products', authenticateToken, async (req, res) => {
 app.post('/api/products', authenticateToken, async (req, res) => {
   const { id, ...data } = req.body;
   try {
-    // Ajuste nos dados de imposto (tax) se vier como objeto, Prisma pode precisar de JSON stringify dependendo do schema
-    // Mas assumindo que seu schema usa Json type, está ok passar objeto direto.
     if (id) {
         const updated = await prisma.nfeProduto.upsert({
             where: { id },
@@ -1056,14 +1045,14 @@ app.delete('/api/products/:id', authenticateToken, async (req, res) => {
 });
 
 // ==========================================
-// --- NFe: NOTAS FISCAIS ---
+// --- NFe: NOTAS FISCAIS (COM INTELIGÊNCIA) ---
 // ==========================================
-// Rota padronizada para /api/invoices (opcional, mas recomendado)
+
 app.get('/api/nfe/notas', authenticateToken, async (req, res) => {
   try {
-    const notas = await prisma.nfeDocumento.findMany({ orderBy: { createdAt: 'desc' } });
+    // MELHORIA: Ordena por Data de Emissão (mais recente primeiro)
+    const notas = await prisma.nfeDocumento.findMany({ orderBy: { dataEmissao: 'desc' } });
     const mappedNotas = notas.map(n => {
-        // Fallback seguro se fullData for nulo
         const base = n.fullData || {};
         return {
             ...base, 
@@ -1071,7 +1060,6 @@ app.get('/api/nfe/notas', authenticateToken, async (req, res) => {
             status: n.status,
             chaveAcesso: n.chaveAcesso,
             xmlAssinado: n.xmlAssinado,
-            // Garante data string
             dataEmissao: n.dataEmissao ? new Date(n.dataEmissao).toISOString() : base.dataEmissao
         };
     });
@@ -1085,7 +1073,54 @@ app.get('/api/nfe/notas', authenticateToken, async (req, res) => {
 app.post('/api/nfe/notas', authenticateToken, async (req, res) => {
   const invoiceData = req.body;
   try {
-    // Prepara objeto para salvar
+    // --- 1. LÓGICA DE AUTO-CADASTRO (Isso estava faltando no seu código antigo) ---
+    
+    // Salvar Destinatário se não existir
+    if (invoiceData.destinatario && invoiceData.destinatario.cnpj) {
+        try {
+            const existingDest = await prisma.nfeDestinatario.findFirst({
+                where: { cnpj: invoiceData.destinatario.cnpj }
+            });
+            if (!existingDest) {
+                await prisma.nfeDestinatario.create({
+                    data: {
+                        cnpj: invoiceData.destinatario.cnpj,
+                        razaoSocial: invoiceData.destinatario.razaoSocial,
+                        inscricaoEstadual: invoiceData.destinatario.inscricaoEstadual || '',
+                        endereco: invoiceData.destinatario.endereco || {},
+                        email: invoiceData.destinatario.email || ''
+                    }
+                });
+            }
+        } catch (e) { console.error("Auto-cadastro dest falhou (ignorado):", e); }
+    }
+
+    // Salvar Produtos se não existirem
+    if (invoiceData.produtos && Array.isArray(invoiceData.produtos)) {
+        for (const prod of invoiceData.produtos) {
+            try {
+                 const existingProd = await prisma.nfeProduto.findFirst({
+                    where: { codigo: prod.codigo }
+                 });
+                 if (!existingProd) {
+                    await prisma.nfeProduto.create({
+                        data: {
+                            codigo: prod.codigo,
+                            descricao: prod.descricao,
+                            ncm: prod.ncm || '',
+                            cfop: prod.cfop || '',
+                            unidade: prod.unidade,
+                            valorUnitario: parseFloat(prod.valorUnitario) || 0,
+                            gtin: prod.gtin || 'SEM GTIN',
+                            tax: prod.tax || {}
+                        }
+                    });
+                 }
+            } catch (e) { console.error("Auto-cadastro prod falhou (ignorado):", e); }
+        }
+    }
+
+    // --- 2. SALVAR A NOTA ---
     const dataToSave = {
         numero: invoiceData.numero,
         serie: invoiceData.serie,
@@ -1094,7 +1129,7 @@ app.post('/api/nfe/notas', authenticateToken, async (req, res) => {
         xmlAssinado: invoiceData.xmlAssinado,
         dataEmissao: new Date(invoiceData.dataEmissao),
         emitenteCnpj: invoiceData.emitente?.cnpj,
-        fullData: invoiceData // Salva o JSON completo para recuperar fácil no front
+        fullData: invoiceData 
     };
 
     if (invoiceData.id) {
@@ -1109,12 +1144,10 @@ app.post('/api/nfe/notas', authenticateToken, async (req, res) => {
     }
 
     const created = await prisma.nfeDocumento.create({
-      data: {
-        ...dataToSave,
-        id: invoiceData.id // Se vier ID do front (ex: uuid), usa ele
-      }
+      data: { ...dataToSave, id: invoiceData.id }
     });
     res.status(201).json({ ...invoiceData, id: created.id });
+
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Erro ao salvar nota fiscal.' });
