@@ -896,60 +896,72 @@ app.delete('/api/calculadora/:id', authenticateToken, async (req, res) => {
 // ==========================================
 // --- NFe: EMISSORES (EMITENTES) ---
 // ==========================================
-// Rota bate com RegistryManager: 'issuers'
+
+// GET: Buscar todos os emissores
 app.get('/api/issuers', authenticateToken, async (req, res) => {
   try {
-    // Busca entidades do tipo ISSUER
-    const issuers = await prisma.entity.findMany({
-      where: { type: 'ISSUER' } 
-    });
+    // CORREÇÃO: Usar 'nfeEmitente' em vez de 'entity'
+    const issuers = await prisma.nfeEmitente.findMany();
     res.json(issuers);
   } catch (error) {
     console.error("Erro buscar emissores:", error);
-    res.json([]); 
+    res.status(500).json([]); 
   }
 });
 
+// POST: Salvar novo emissor
 app.post('/api/issuers', authenticateToken, async (req, res) => {
   try {
     const data = req.body;
+    // Remove ID se vier vazio
     if (!data.id) delete data.id;
 
-    const newIssuer = await prisma.entity.create({
+    // CORREÇÃO: Usar 'nfeEmitente' e passar endereço direto (sem JSON.stringify)
+    const newIssuer = await prisma.nfeEmitente.create({
       data: {
-        ...data,
-        type: 'ISSUER',
-        // Garante que endereço seja string JSON se o banco pedir
-        endereco: typeof data.endereco === 'object' ? JSON.stringify(data.endereco) : data.endereco
+        cnpj: data.cnpj,
+        razaoSocial: data.razaoSocial,
+        inscricaoEstadual: data.inscricaoEstadual,
+        email: data.email,
+        crt: data.crt,
+        endereco: data.endereco, // O Prisma converte automaticamente para o tipo Json
       }
     });
     res.json(newIssuer);
   } catch (error) {
-    console.error("Erro criar emissor:", error);
+    console.error("Erro ao criar emissor:", error);
     res.status(500).json({ error: 'Erro ao salvar emissor.' });
   }
 });
 
+// PUT: Atualizar emissor
 app.put('/api/issuers/:id', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
     const { id: _, ...data } = req.body;
-    const updated = await prisma.entity.update({
+
+    const updated = await prisma.nfeEmitente.update({
       where: { id },
       data: {
-        ...data,
-        endereco: typeof data.endereco === 'object' ? JSON.stringify(data.endereco) : data.endereco
+        cnpj: data.cnpj,
+        razaoSocial: data.razaoSocial,
+        inscricaoEstadual: data.inscricaoEstadual,
+        email: data.email,
+        crt: data.crt,
+        endereco: data.endereco,
       }
     });
     res.json(updated);
   } catch (error) {
+    console.error("Erro ao atualizar emissor:", error);
     res.status(500).json({ error: 'Erro ao atualizar emissor.' });
   }
 });
 
+// DELETE: Excluir emissor
 app.delete('/api/issuers/:id', authenticateToken, async (req, res) => {
   try {
-    await prisma.entity.delete({ where: { id: req.params.id } });
+    await prisma.nfeEmitente.delete({ where: { id: req.params.id } });
     res.status(204).send();
   } catch (error) {
     res.status(500).json({ error: 'Erro ao excluir.' });
