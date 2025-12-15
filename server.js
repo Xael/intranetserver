@@ -1,8 +1,8 @@
 const { parseString } = require('xml2js');
 const { promisify } = require('util');
 const parseXml = promisify(parseString);
-// REMOVIDO: const NFeService = require('./services/NFeService'); 
-// A classe NFeService agora está definida internamente abaixo para evitar erros de Docker.
+// A LINHA ABAIXO FOI REMOVIDA PARA CORRIGIR O ERRO MODULE_NOT_FOUND
+// const NFeService = require('./services/NFeService'); 
 
 const path = require('path');
 const express = require('express');
@@ -25,7 +25,7 @@ const PORT = process.env.PORT || 3001;
 // É altamente recomendável mover esta chave para uma variável de ambiente (.env)
 const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-key-that-is-long-and-secure';
 
-// --- CLASSE NFeService (EMBUTIDA PARA CORRIGIR ERRO DE MODULE NOT FOUND) ---
+// --- CLASSE NFeService (EMBUTIDA) ---
 class NFeService {
     constructor(pfxBuffer, senhaCertificado) {
         if (!pfxBuffer || !senhaCertificado) {
@@ -1364,43 +1364,58 @@ app.delete('/api/nfe/notas/:id', authenticateToken, async (req, res) => {
   }
 });
 
+// --- ROTA DE TRANSMISSÃO CORRIGIDA (SEM INCLUDE ERRADO) ---
 app.post('/api/nfe/transmitir', authenticateToken, async (req, res) => {
     try {
         const { id } = req.body;
         
-        // 1. Busca a Nota e o Emitente Completo
+        // LOG PARA DEBUG
+        console.log(`Iniciando transmissão NFe para ID: ${id}`);
+
+        // 1. Busca APENAS a Nota (sem include quebrado)
         const nfeDoc = await prisma.nfeDocumento.findUnique({ 
-            where: { id },
-            include: { emitente: true } // Precisamos buscar o cadastro da empresa
+            where: { id }
         });
 
         if (!nfeDoc) return res.status(404).json({ error: 'Nota não encontrada' });
 
-        // 2. Busca o Certificado no Banco de Dados (NÃO NO DISCO)
-        // Supondo que você salvou o certificado na tabela 'Issuer' ou na própria 'Entity'
-        // Ajuste 'certificadoArquivo' para o nome do campo no seu banco
-        const issuer = await prisma.issuer.findUnique({
-            where: { cnpj: nfeDoc.emitente.cnpj }
+        // 2. Extrai o CNPJ do JSON salvo na nota
+        const cnpjEmitente = nfeDoc.emitenteCnpj || (nfeDoc.fullData && nfeDoc.fullData.emitente ? nfeDoc.fullData.emitente.cnpj : null);
+        
+        if (!cnpjEmitente) {
+             return res.status(400).json({ error: 'CNPJ do emitente não encontrado na nota.' });
+        }
+
+        console.log(`Buscando certificado para CNPJ: ${cnpjEmitente}`);
+
+        // 3. Busca o Certificado na tabela CORRETA (nfeEmitente)
+        const issuer = await prisma.nfeEmitente.findUnique({
+            where: { cnpj: cnpjEmitente }
         });
 
         if (!issuer || !issuer.certificadoArquivo || !issuer.certificadoSenha) {
+            console.error("Erro: Certificado ausente no banco de dados.");
             return res.status(400).json({ error: 'Certificado digital não cadastrado para este emitente.' });
         }
 
         // Se estiver salvo como Base64 no banco, converte para Buffer
-        // Se já estiver como Bytes no Prisma, use direto
         const pfxBuffer = Buffer.isBuffer(issuer.certificadoArquivo) 
             ? issuer.certificadoArquivo 
             : Buffer.from(issuer.certificadoArquivo, 'base64');
 
-        // 3. Instancia o Serviço passando o BUFFER e a SENHA
+        // 4. Instancia o Serviço passando o BUFFER e a SENHA
         const service = new NFeService(pfxBuffer, issuer.certificadoSenha);
+        
+        console.log("Gerando XML...");
         const xml = service.generateXML(nfeDoc.fullData);
+        
+        console.log("Assinando XML...");
         const xmlAssinado = service.signXML(xml);
-        console.log("Transmitindo NFe para SEFAZ...");
+        
+        console.log("Transmitindo para SEFAZ...");
         const retornoSefaz = await service.transmit(xmlAssinado); // Retorno é o XML bruto da SEFAZ
 
-// 4. Processamento da Resposta da SEFAZ (cStat)
+        // 5. Processamento da Resposta da SEFAZ (cStat)
         const result = await parseXml(retornoSefaz, { explicitArray: false });
 
         // A estrutura do XML de resposta (SOAP) é complexa. O caminho abaixo é o padrão:
@@ -1424,14 +1439,14 @@ app.post('/api/nfe/transmitir', authenticateToken, async (req, res) => {
                 data: { 
                     status: newStatus, 
                     xmlAssinado: xmlAssinado,
-                    protocoloAutorizacao: protocolo // Campo necessário no seu Schema Prisma!
+                    protocoloAutorizacao: protocolo 
                 }
             });
             responseJson = { sucesso: true, xml: xmlAssinado, status: newStatus, protocolo: protocolo };
             res.json(responseJson);
 
         } else if (cStat === '103') {
-            // Lote em processamento - precisa de consulta posterior (Simplificação: salva como pending)
+            // Lote em processamento
             newStatus = 'processing';
             console.warn(`Lote em Processamento. Motivo: ${xMotivo}`);
             await prisma.nfeDocumento.update({
@@ -1442,7 +1457,7 @@ app.post('/api/nfe/transmitir', authenticateToken, async (req, res) => {
             res.json(responseJson);
             
         } else {
-            // Rejeição ou outro erro (2xx, 3xx, 4xx, etc.)
+            // Rejeição
             newStatus = 'rejected';
             console.error(`Rejeição NFe: [${cStat}] ${xMotivo}`);
             
@@ -1453,7 +1468,7 @@ app.post('/api/nfe/transmitir', authenticateToken, async (req, res) => {
             });
             
             responseJson = { sucesso: false, status: newStatus, erro: `Rejeição [${cStat || '??'}]: ${xMotivo}` };
-            res.status(400).json(responseJson); // Retorna 400 Bad Request para o Frontend
+            res.status(400).json(responseJson); 
         }
 
     } catch (error) {
