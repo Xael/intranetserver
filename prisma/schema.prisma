@@ -312,6 +312,7 @@ model NfeDocumento {
   status      String // draft, authorized, cancelled, error
   xmlAssinado String?  @db.Text
   dataEmissao DateTime @default(now())
+  protocoloAutorizacao String?
 
   // Armazena o snapshot completo da nota
   fullData Json
@@ -335,3 +336,4 @@ model SystemSettings {
 
   @@map("system_settings")
 }
+
