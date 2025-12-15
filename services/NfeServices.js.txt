@@ -1,0 +1,79 @@
+const https = require('https');
+const axios = require('axios');
+const forge = require('node-forge');
+const { SignedXml } = require('xml-crypto');
+const { create } = require('xmlbuilder2');
+
+class NFeService {
+    // Agora o construtor aceita o BUFFER do certificado (vindo do banco)
+    constructor(pfxBuffer, senhaCertificado) {
+        if (!pfxBuffer || !senhaCertificado) {
+            throw new Error("Certificado ou senha não fornecidos.");
+        }
+
+        this.pfxBuffer = pfxBuffer;
+        this.senha = senhaCertificado;
+
+        try {
+            // Extrair chave privada para assinatura
+            const p12Asn1 = forge.asn1.fromDer(this.pfxBuffer.toString('binary'));
+            const p12 = forge.pkcs12.pkcs12FromAsn1(p12Asn1, false, this.senha);
+            
+            const keyData = p12.getBags({ bagType: forge.pki.oids.pkcs8ShroudedKeyBag })[forge.pki.oids.pkcs8ShroudedKeyBag][0];
+            this.privateKeyPem = forge.pki.privateKeyToPem(keyData.key);
+        } catch (e) {
+            throw new Error("Senha do certificado incorreta ou arquivo inválido.");
+        }
+
+        // Agente HTTPS com o certificado carregado da memória
+        this.httpsAgent = new https.Agent({
+            pfx: this.pfxBuffer,
+            passphrase: this.senha,
+            rejectUnauthorized: false
+        });
+    }
+
+    // ... (MANTENHA A FUNÇÃO generateXML IGUAL A QUE PASSEI ANTES) ...
+    generateXML(data) {
+        // Copie o código do generateXML da resposta anterior aqui
+        // Vou resumir para não ficar gigante, mas é a mesma lógica
+        const nfe = { 
+            NFe: { 
+                infNFe: { 
+                    ide: { cNF: data.numero, natOp: 'VENDA', ...data.emitente, ...data.destinatario },
+                    // ... resto da estrutura
+                } 
+            } 
+        };
+        return create(nfe).end({ prettyPrint: false });
+    }
+
+    // ... (MANTENHA A FUNÇÃO signXML IGUAL) ...
+    signXML(xml) {
+        const sig = new SignedXml();
+        sig.addReference("//*[local-name(.)='infNFe']", ["http://www.w3.org/2000/09/xmldsig#enveloped-signature", "http://www.w3.org/TR/2001/REC-xml-c14n-20010315"], "http://www.w3.org/2000/09/xmldsig#sha1");
+        sig.signingKey = this.privateKeyPem;
+        sig.canonicalizationAlgorithm = "http://www.w3.org/TR/2001/REC-xml-c14n-20010315";
+        sig.signatureAlgorithm = "http://www.w3.org/2000/09/xmldsig#rsa-sha1";
+        sig.computeSignature(xml);
+        return sig.getSignedXml();
+    }
+
+    // ... (MANTENHA A FUNÇÃO transmit IGUAL) ...
+    async transmit(xmlAssinado) {
+        const envelope = `<soap12:Envelope ...> ... ${xmlAssinado} ... </soap12:Envelope>`;
+        const url = 'https://homologacao.nfe.fazenda.sp.gov.br/ws/nfeautorizacao4.asmx';
+        
+        try {
+            const res = await axios.post(url, envelope, {
+                headers: { 'Content-Type': 'application/soap+xml; charset=utf-8' },
+                httpsAgent: this.httpsAgent
+            });
+            return res.data;
+        } catch (error) {
+            throw new Error(`Erro conexão SEFAZ: ${error.message}`);
+        }
+    }
+}
+
+module.exports = NFeService;
