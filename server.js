@@ -1090,7 +1090,13 @@ app.delete('/api/calculadora/:id', authenticateToken, async (req, res) => {
 app.get('/api/issuers', authenticateToken, async (req, res) => {
   try {
     const issuers = await prisma.nfeEmitente.findMany();
-    res.json(issuers);
+    // Não retornamos a senha nem o arquivo binário por segurança e performance na listagem
+    const safeIssuers = issuers.map(i => ({
+        ...i,
+        certificadoSenha: i.certificadoSenha ? '***' : null,
+        certificadoArquivo: i.certificadoArquivo ? 'Presente' : null
+    }));
+    res.json(safeIssuers);
   } catch (error) {
     console.error("Erro buscar emissores:", error);
     res.status(500).json([]); 
@@ -1102,14 +1108,20 @@ app.post('/api/issuers', authenticateToken, async (req, res) => {
     const data = req.body;
     if (!data.id) delete data.id;
 
+    // Limpa CNPJ para garantir busca correta depois
+    const cleanCNPJ = data.cnpj.replace(/\D/g, '');
+
     const newIssuer = await prisma.nfeEmitente.create({
       data: {
-        cnpj: data.cnpj,
+        cnpj: cleanCNPJ, // Salva apenas números
         razaoSocial: data.razaoSocial,
         inscricaoEstadual: data.inscricaoEstadual,
         email: data.email,
         crt: data.crt,
         endereco: data.endereco,
+        // --- ADICIONADO: Salvar certificado e senha ---
+        certificadoArquivo: data.certificadoArquivo, // Espera string Base64
+        certificadoSenha: data.certificadoSenha
       }
     });
     res.json(newIssuer);
@@ -1123,17 +1135,24 @@ app.put('/api/issuers/:id', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
     const { id: _, ...data } = req.body;
-
-    const updated = await prisma.nfeEmitente.update({
-      where: { id },
-      data: {
-        cnpj: data.cnpj,
+    
+    // Prepara objeto de atualização
+    const dataToUpdate = {
+        cnpj: data.cnpj.replace(/\D/g, ''),
         razaoSocial: data.razaoSocial,
         inscricaoEstadual: data.inscricaoEstadual,
         email: data.email,
         crt: data.crt,
         endereco: data.endereco,
-      }
+    };
+
+    // Só atualiza certificado/senha se eles foram enviados (para não apagar se vier vazio)
+    if (data.certificadoArquivo) dataToUpdate.certificadoArquivo = data.certificadoArquivo;
+    if (data.certificadoSenha) dataToUpdate.certificadoSenha = data.certificadoSenha;
+
+    const updated = await prisma.nfeEmitente.update({
+      where: { id },
+      data: dataToUpdate
     });
     res.json(updated);
   } catch (error) {
@@ -1379,18 +1398,17 @@ app.post('/api/nfe/transmitir', authenticateToken, async (req, res) => {
 
         if (!nfeDoc) return res.status(404).json({ error: 'Nota não encontrada' });
 
-        // 2. Extrai o CNPJ do JSON salvo na nota
-        const cnpjEmitente = nfeDoc.emitenteCnpj || (nfeDoc.fullData && nfeDoc.fullData.emitente ? nfeDoc.fullData.emitente.cnpj : null);
+        // 2. Extrai o CNPJ e LIMPA (remove pontos/traços)
+        let cnpjRaw = nfeDoc.emitenteCnpj || (nfeDoc.fullData && nfeDoc.fullData.emitente ? nfeDoc.fullData.emitente.cnpj : null);
+        if (!cnpjRaw) return res.status(400).json({ error: 'CNPJ do emitente não encontrado na nota.' });
         
-        if (!cnpjEmitente) {
-             return res.status(400).json({ error: 'CNPJ do emitente não encontrado na nota.' });
-        }
+        const cnpjClean = cnpjRaw.replace(/\D/g, ''); // <--- IMPORTANTE
 
-        console.log(`Buscando certificado para CNPJ: ${cnpjEmitente}`);
+        console.log(`Buscando certificado para CNPJ: ${cnpjClean}`);
 
-        // 3. Busca o Certificado na tabela CORRETA (nfeEmitente)
+        // 3. Busca o Certificado usando o CNPJ limpo
         const issuer = await prisma.nfeEmitente.findUnique({
-            where: { cnpj: cnpjEmitente }
+            where: { cnpj: cnpjClean }
         });
 
         if (!issuer || !issuer.certificadoArquivo || !issuer.certificadoSenha) {
