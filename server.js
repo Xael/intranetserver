@@ -1,3 +1,6 @@
+const { parseString } = require('xml2js');
+const { promisify } = require('util');
+const parseXml = promisify(parseString);
 const NFeService = require('./services/NFeService');
 const path = require('path');
 const express = require('express');
@@ -1210,21 +1213,46 @@ app.post('/api/nfe/transmitir', authenticateToken, async (req, res) => {
         // 3. Instancia o Serviço passando o BUFFER e a SENHA
         const service = new NFeService(pfxBuffer, issuer.certificadoSenha);
 
-        // 4. Fluxo Normal
-        const xml = service.generateXML(nfeDoc.fullData);
-        const xmlAssinado = service.signXML(xml);
-        const retornoSefaz = await service.transmit(xmlAssinado);
+// 4. Fluxo Normal
+const xml = service.generateXML(nfeDoc.fullData);
+const xmlAssinado = service.signXML(xml);
+const retornoSefaz = await service.transmit(xmlAssinado); // XML DE RESPOSTA BRUTO
 
-        // 5. Salva (Assumindo sucesso para simplificar)
-        await prisma.nfeDocumento.update({
-            where: { id },
-            data: { 
-                status: 'authorized', 
-                xmlAssinado: xmlAssinado 
-            }
-        });
+// === NOVA ETAPA: PROCESSAMENTO DA RESPOSTA ===
+const result = await parseXml(retornoSefaz, { explicitArray: false });
 
-        res.json({ sucesso: true, xml: xmlAssinado });
+// Acha o campo cStat no XML de resposta da SEFAZ (a estrutura exata pode variar)
+const protNFe = result['soap12:Envelope']['soap12:Body']['nfeAutorizacaoLoteResult']['retEnviNFe']['protNFe'];
+const cStat = protNFe ? protNFe.infProt.cStat : null;
+const xMotivo = protNFe ? protNFe.infProt.xMotivo : "Erro desconhecido";
+const protocolo = protNFe ? protNFe.infProt.nProt : null;
+
+let newStatus = 'error';
+
+if (cStat === '100') {
+    newStatus = 'authorized';
+    console.log(`NFe Autorizada! Protocolo: ${protocolo}`);
+    // Salvar o protocolo no banco é crucial
+    await prisma.nfeDocumento.update({
+        where: { id },
+        data: { 
+            status: newStatus, 
+            xmlAssinado: xmlAssinado,
+            protocoloAutorizacao: protocolo // Adicione este campo na sua tabela!
+        }
+    });
+    res.json({ sucesso: true, xml: xmlAssinado, status: newStatus, protocolo: protocolo });
+
+} else {
+    // Rejeição ou outro erro
+    newStatus = 'rejected';
+    console.error(`Rejeição NFe: [${cStat}] ${xMotivo}`);
+    await prisma.nfeDocumento.update({
+        where: { id },
+        data: { status: newStatus }
+    });
+    res.status(400).json({ sucesso: false, status: newStatus, erro: `Rejeição [${cStat}]: ${xMotivo}` });
+}
 
     } catch (error) {
         console.error("Erro Transmissão:", error);
