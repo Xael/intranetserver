@@ -1176,6 +1176,62 @@ app.delete('/api/nfe/notas/:id', authenticateToken, async (req, res) => {
   }
 });
 
+const NFeService = require('./services/NFeService');
+
+app.post('/api/nfe/transmitir', authenticateToken, async (req, res) => {
+    try {
+        const { id } = req.body;
+        
+        // 1. Busca a Nota e o Emitente Completo
+        const nfeDoc = await prisma.nfeDocumento.findUnique({ 
+            where: { id },
+            include: { emitente: true } // Precisamos buscar o cadastro da empresa
+        });
+
+        if (!nfeDoc) return res.status(404).json({ error: 'Nota não encontrada' });
+
+        // 2. Busca o Certificado no Banco de Dados (NÃO NO DISCO)
+        // Supondo que você salvou o certificado na tabela 'Issuer' ou na própria 'Entity'
+        // Ajuste 'certificadoArquivo' para o nome do campo no seu banco
+        const issuer = await prisma.issuer.findUnique({
+            where: { cnpj: nfeDoc.emitente.cnpj }
+        });
+
+        if (!issuer || !issuer.certificadoArquivo || !issuer.certificadoSenha) {
+            return res.status(400).json({ error: 'Certificado digital não cadastrado para este emitente.' });
+        }
+
+        // Se estiver salvo como Base64 no banco, converte para Buffer
+        // Se já estiver como Bytes no Prisma, use direto
+        const pfxBuffer = Buffer.isBuffer(issuer.certificadoArquivo) 
+            ? issuer.certificadoArquivo 
+            : Buffer.from(issuer.certificadoArquivo, 'base64');
+
+        // 3. Instancia o Serviço passando o BUFFER e a SENHA
+        const service = new NFeService(pfxBuffer, issuer.certificadoSenha);
+
+        // 4. Fluxo Normal
+        const xml = service.generateXML(nfeDoc.fullData);
+        const xmlAssinado = service.signXML(xml);
+        const retornoSefaz = await service.transmit(xmlAssinado);
+
+        // 5. Salva (Assumindo sucesso para simplificar)
+        await prisma.nfeDocumento.update({
+            where: { id },
+            data: { 
+                status: 'authorized', 
+                xmlAssinado: xmlAssinado 
+            }
+        });
+
+        res.json({ sucesso: true, xml: xmlAssinado });
+
+    } catch (error) {
+        console.error("Erro Transmissão:", error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // Inicia o servidor
 app.listen(PORT, () => {
   console.log(`Server is listening on port ${PORT}`);
