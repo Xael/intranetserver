@@ -1179,8 +1179,6 @@ app.delete('/api/nfe/notas/:id', authenticateToken, async (req, res) => {
   }
 });
 
-const NFeService = require('./services/NFeService');
-
 app.post('/api/nfe/transmitir', authenticateToken, async (req, res) => {
     try {
         const { id } = req.body;
