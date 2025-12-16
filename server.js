@@ -39,7 +39,6 @@ class NFeService {
       const p12Asn1 = forge.asn1.fromDer(this.pfxBuffer.toString("binary"));
       const p12 = forge.pkcs12.pkcs12FromAsn1(p12Asn1, false, this.senha);
 
-      // Chave privada
       const keyBags =
         p12.getBags({ bagType: forge.pki.oids.pkcs8ShroudedKeyBag })[
           forge.pki.oids.pkcs8ShroudedKeyBag
@@ -48,20 +47,16 @@ class NFeService {
       if (!keyData?.key) throw new Error("Chave privada não encontrada no certificado.");
       this.privateKeyPem = forge.pki.privateKeyToPem(keyData.key);
 
-      // Certificados
       const certBags =
         p12.getBags({ bagType: forge.pki.oids.certBag })[forge.pki.oids.certBag] || [];
       if (!certBags.length) throw new Error("Certificado não encontrado no PFX.");
 
-      // Cadeia PEM (cliente + intermediários)
       this.certChainPem = certBags.map((b) => forge.pki.certificateToPem(b.cert)).join("\n");
 
-      // Leaf cert (para X509Certificate no KeyInfo)
       const leafCert = certBags[0].cert;
       const asn1Cert = forge.pki.certificateToAsn1(leafCert);
       const derBytes = forge.asn1.toDer(asn1Cert).getBytes();
       this.leafCertBase64 = forge.util.encode64(derBytes);
-
     } catch (e) {
       throw new Error("Senha do certificado incorreta ou arquivo inválido.");
     }
@@ -74,66 +69,117 @@ class NFeService {
     });
   }
 
-  // ---------- helpers ----------
+  // ---------------- helpers ----------------
   onlyDigits(v) {
     return String(v ?? "").replace(/\D/g, "");
   }
+
+  // remove caracteres de controle (evita rejeições)
+  sanitizeText(v, maxLen = 120) {
+    return String(v ?? "")
+      .replace(/[\u0000-\u001F\u007F]/g, "") // controles
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, maxLen);
+  }
+
   fixed(v, dec) {
     const n = Number(String(v ?? "0").replace(",", "."));
     if (!Number.isFinite(n)) return (0).toFixed(dec);
     return n.toFixed(dec);
   }
+
   cep8(v) {
     const d = this.onlyDigits(v);
     return d.padStart(8, "0").slice(0, 8);
   }
+
   ncm8(v) {
     const d = this.onlyDigits(v);
     return d.padStart(8, "0").slice(0, 8);
   }
+
   cfop4(v) {
     const d = this.onlyDigits(v);
     return d.slice(0, 4);
   }
+
   ibge7(v) {
     const d = this.onlyDigits(v);
     return d.slice(0, 7);
   }
 
-  // ---------- XML ----------
-  generateXML(data) {
-    // Validações que evitam 225
-    const chave = this.onlyDigits(data?.chaveAcesso);
-    if (!/^\d{44}$/.test(chave)) {
-      throw new Error(`Chave de acesso inválida. Precisa ter 44 dígitos. Recebido: "${data?.chaveAcesso}"`);
+  // 🔑 chave 44 dígitos => campos do ide
+  parseChaveAcesso(chave44) {
+    const ch = this.onlyDigits(chave44);
+    if (!/^\d{44}$/.test(ch)) {
+      throw new Error(`Chave de acesso inválida (precisa 44 dígitos). Recebido: "${chave44}"`);
+    }
+    return {
+      cUF: ch.slice(0, 2),
+      AAMM: ch.slice(2, 6),
+      CNPJ: ch.slice(6, 20),
+      mod: ch.slice(20, 22),
+      serie: ch.slice(22, 25),
+      nNF: ch.slice(25, 34),
+      tpEmis: ch.slice(34, 35),
+      cNF: ch.slice(35, 43),
+      cDV: ch.slice(43, 44),
+      chave: ch,
+    };
+  }
+
+  // monta dhEmi coerente com AAMM da chave
+  makeDhEmiFromKey(dataEmissao, AAMM) {
+    // se veio dataEmissao do seu sistema, usa, mas garante mês/ano da chave
+    const yy = Number("20" + AAMM.slice(0, 2));
+    const mm = Number(AAMM.slice(2, 4)); // 1..12
+
+    let d = dataEmissao ? new Date(dataEmissao) : new Date();
+
+    // força ano/mês da chave (evita divergência com a chave)
+    if (!Number.isNaN(yy) && !Number.isNaN(mm) && mm >= 1 && mm <= 12) {
+      const day = Math.min(d.getDate() || 1, 28); // evita estourar mês
+      d = new Date(yy, mm - 1, day, d.getHours(), d.getMinutes(), d.getSeconds());
     }
 
+    // ISO sem offset do sistema, fixando -03:00
+    const isoLocal = new Date(d.getTime() - d.getTimezoneOffset() * 60000)
+      .toISOString()
+      .slice(0, 19);
+
+    return isoLocal + "-03:00";
+  }
+
+  // ---------------- XML ----------------
+  generateXML(data) {
+    const k = this.parseChaveAcesso(data?.chaveAcesso);
+
     const emitCNPJ = this.onlyDigits(data?.emitente?.cnpj);
-    const destCNPJ = this.onlyDigits(data?.destinatario?.cnpj);
+    if (emitCNPJ !== k.CNPJ) {
+      throw new Error(
+        `CNPJ do emitente (${emitCNPJ}) diferente do CNPJ da chave (${k.CNPJ}). Corrija a chave ou o emitente.`
+      );
+    }
+
+    const emitIE = this.onlyDigits(data?.emitente?.inscricaoEstadual);
+    if (!emitIE) throw new Error("IE do emitente inválida/vazia.");
 
     const emitCEP = this.cep8(data?.emitente?.endereco?.cep);
     const destCEP = this.cep8(data?.destinatario?.endereco?.cep);
 
-    const emitIE = this.onlyDigits(data?.emitente?.inscricaoEstadual);
-
     const cMunEmit = this.ibge7(data?.emitente?.endereco?.codigoIbge);
     const cMunDest = this.ibge7(data?.destinatario?.endereco?.codigoIbge);
 
-    if (emitCEP.length !== 8) throw new Error("CEP do emitente inválido (precisa 8 dígitos).");
-    if (destCEP.length !== 8) throw new Error("CEP do destinatário inválido (precisa 8 dígitos).");
-    if (!emitCNPJ || emitCNPJ.length !== 14) throw new Error("CNPJ do emitente inválido.");
-    if (!destCNPJ || destCNPJ.length !== 14) throw new Error("CNPJ do destinatário inválido.");
-    if (!cMunEmit) throw new Error("Código IBGE do município do emitente inválido.");
-    if (!cMunDest) throw new Error("Código IBGE do município do destinatário inválido.");
-    if (!emitIE) throw new Error("IE do emitente inválida/vazia.");
+    if (emitCEP.length !== 8) throw new Error("CEP do emitente inválido (8 dígitos).");
+    if (destCEP.length !== 8) throw new Error("CEP do destinatário inválido (8 dígitos).");
+    if (cMunEmit.length !== 7) throw new Error("Código IBGE do município do emitente inválido (7 dígitos).");
+    if (cMunDest.length !== 7) throw new Error("Código IBGE do município do destinatário inválido (7 dígitos).");
 
-    const now = new Date();
-    const dhEmi = new Date(now.getTime() - now.getTimezoneOffset() * 60000)
-      .toISOString()
-      .slice(0, 19) + "-03:00";
+    const destCNPJ = this.onlyDigits(data?.destinatario?.cnpj);
+    if (!/^\d{14}$/.test(destCNPJ)) throw new Error("CNPJ do destinatário inválido.");
 
-    const serie = String(Number(data?.serie || 1));
-    const nNF = String(Number(data?.numero || 1));
+    const dhEmi = this.makeDhEmiFromKey(data?.dataEmissao, k.AAMM);
 
     const vProdTotal = Number(data?.totais?.vProd || 0);
     const vNFTotal = Number(data?.totais?.vNF || vProdTotal);
@@ -142,23 +188,23 @@ class NFeService {
       NFe: {
         "@xmlns": "http://www.portalfiscal.inf.br/nfe",
         infNFe: {
-          "@Id": `NFe${chave}`,
+          "@Id": `NFe${k.chave}`,
           "@versao": "4.00",
           ide: {
-            cUF: "35", // SP
-            cNF: String(Math.floor(Math.random() * 99999999)).padStart(8, "0"),
-            natOp: data?.natOp || "VENDA DE MERCADORIA",
-            mod: "55",
-            serie,
-            nNF,
+            cUF: k.cUF,
+            cNF: k.cNF,                 // ✅ NÃO PODE ser aleatório se você já tem a chave
+            natOp: this.sanitizeText(data?.natOp || "VENDA DE MERCADORIA", 60),
+            mod: k.mod,                 // 55
+            serie: String(Number(k.serie)), // ok: 1..999
+            nNF: String(Number(k.nNF)),     // ok: 1..999999999
             dhEmi,
             tpNF: "1",
             idDest: "1",
             cMunFG: cMunEmit,
             tpImp: "1",
-            tpEmis: "1",
-            cDV: chave.slice(-1),
-            tpAmb: "2", // homologação
+            tpEmis: k.tpEmis,          // ✅ bate com a chave
+            cDV: k.cDV,                // ✅ DV da chave
+            tpAmb: "2",
             finNFe: "1",
             indFinal: "1",
             indPres: "1",
@@ -167,14 +213,14 @@ class NFeService {
           },
           emit: {
             CNPJ: emitCNPJ,
-            xNome: data?.emitente?.razaoSocial,
+            xNome: this.sanitizeText(data?.emitente?.razaoSocial, 60),
             enderEmit: {
-              xLgr: data?.emitente?.endereco?.logradouro,
-              nro: String(data?.emitente?.endereco?.numero ?? "S/N"),
-              xBairro: data?.emitente?.endereco?.bairro,
+              xLgr: this.sanitizeText(data?.emitente?.endereco?.logradouro, 60),
+              nro: this.sanitizeText(data?.emitente?.endereco?.numero ?? "S/N", 60),
+              xBairro: this.sanitizeText(data?.emitente?.endereco?.bairro, 60),
               cMun: cMunEmit,
-              xMun: data?.emitente?.endereco?.municipio,
-              UF: data?.emitente?.endereco?.uf,
+              xMun: this.sanitizeText(data?.emitente?.endereco?.municipio, 60),
+              UF: this.sanitizeText(data?.emitente?.endereco?.uf, 2),
               CEP: emitCEP,
               cPais: "1058",
               xPais: "BRASIL",
@@ -184,41 +230,43 @@ class NFeService {
           },
           dest: {
             CNPJ: destCNPJ,
-            xNome: data?.destinatario?.razaoSocial,
+            xNome: this.sanitizeText(data?.destinatario?.razaoSocial, 60),
             enderDest: {
-              xLgr: data?.destinatario?.endereco?.logradouro,
-              nro: String(data?.destinatario?.endereco?.numero ?? "S/N"),
-              xBairro: data?.destinatario?.endereco?.bairro,
+              xLgr: this.sanitizeText(data?.destinatario?.endereco?.logradouro, 60),
+              nro: this.sanitizeText(data?.destinatario?.endereco?.numero ?? "S/N", 60),
+              xBairro: this.sanitizeText(data?.destinatario?.endereco?.bairro, 60),
               cMun: cMunDest,
-              xMun: data?.destinatario?.endereco?.municipio,
-              UF: data?.destinatario?.endereco?.uf,
+              xMun: this.sanitizeText(data?.destinatario?.endereco?.municipio, 60),
+              UF: this.sanitizeText(data?.destinatario?.endereco?.uf, 2),
               CEP: destCEP,
               cPais: "1058",
               xPais: "BRASIL",
             },
-            indIEDest: "9", // não contribuinte
+            indIEDest: "9",
           },
           det: (data?.produtos || []).map((prod, i) => {
-            const qCom = this.fixed(prod?.quantidade, 4);
-            const vUnCom = this.fixed(prod?.valorUnitario, 4);
-            const vProd = this.fixed(prod?.valorTotal ?? (Number(prod?.quantidade || 0) * Number(prod?.valorUnitario || 0)), 2);
+            const quantidade = Number(String(prod?.quantidade ?? "0").replace(",", "."));
+            const valorUnit = Number(String(prod?.valorUnitario ?? "0").replace(",", "."));
+            const valorTotal = Number(
+              String(prod?.valorTotal ?? (quantidade * valorUnit) ?? "0").replace(",", ".")
+            );
 
             return {
               "@nItem": String(i + 1),
               prod: {
-                cProd: String(prod?.codigo ?? (i + 1)),
+                cProd: this.sanitizeText(prod?.codigo ?? (i + 1), 60),
                 cEAN: "SEM GTIN",
-                xProd: String(prod?.descricao ?? `Produto ${i + 1}`),
+                xProd: this.sanitizeText(prod?.descricao ?? `Produto ${i + 1}`, 120),
                 NCM: this.ncm8(prod?.ncm),
                 CFOP: this.cfop4(prod?.cfop),
-                uCom: String(prod?.unidade || "UN"),
-                qCom,
-                vUnCom,
-                vProd,
+                uCom: this.sanitizeText((prod?.unidade || "UN").toUpperCase(), 6),
+                qCom: this.fixed(quantidade, 4),
+                vUnCom: this.fixed(valorUnit, 4),
+                vProd: this.fixed(valorTotal, 2),
                 cEANTrib: "SEM GTIN",
-                uTrib: String(prod?.unidade || "UN"),
-                qTrib: qCom,
-                vUnTrib: vUnCom,
+                uTrib: this.sanitizeText((prod?.unidade || "UN").toUpperCase(), 6),
+                qTrib: this.fixed(quantidade, 4),
+                vUnTrib: this.fixed(valorUnit, 4),
                 indTot: "1",
               },
               imposto: {
@@ -252,12 +300,10 @@ class NFeService {
             },
           },
           transp: { modFrete: "9" },
-
-          // ✅ MUITO IMPORTANTE no schema 4.00 (comum causar 225 quando falta)
           pag: {
             detPag: {
               indPag: "0",
-              tPag: "01", // dinheiro (padrão). Se quiser, depois mapeamos por forma de pagamento
+              tPag: "01",
               vPag: this.fixed(vNFTotal, 2),
             },
           },
@@ -269,19 +315,16 @@ class NFeService {
   }
 
   signXML(xml) {
-    // Remove prolog e trims
     const xmlClean = String(xml || "").replace(/^\s*<\?xml[^>]*\?>\s*/i, "").trim();
 
-    // pega Id do infNFe
     const m = xmlClean.match(/<infNFe[^>]*\sId="([^"]+)"/i);
     if (!m) throw new Error("Não encontrei o atributo Id em <infNFe> para assinar.");
-    const infId = m[1]; // ex: NFe44digitos...
+    const infId = m[1];
 
     const sig = new SignedXml();
     sig.signatureAlgorithm = "http://www.w3.org/2000/09/xmldsig#rsa-sha1";
     sig.canonicalizationAlgorithm = "http://www.w3.org/TR/2001/REC-xml-c14n-20010315";
 
-    // Reference com URI = #Id (padrão SEFAZ)
     sig.addReference(
       "//*[local-name(.)='infNFe']",
       [
@@ -294,85 +337,75 @@ class NFeService {
 
     sig.signingKey = this.privateKeyPem;
 
-    // ✅ KeyInfo com X509Certificate (muito importante em vários ambientes SEFAZ)
     sig.keyInfoProvider = {
       getKeyInfo: () =>
         `<X509Data><X509Certificate>${this.leafCertBase64}</X509Certificate></X509Data>`,
     };
 
-    // Assina e coloca Signature dentro do <NFe> (append)
     sig.computeSignature(xmlClean, {
       location: { reference: "//*[local-name(.)='NFe']", action: "append" },
     });
 
     return sig.getSignedXml();
   }
-  
-async transmit(xmlAssinado, tpAmb = 2, cUF = 35) {
-  // 1) não pode ter <?xml ...?> dentro do nfeDadosMsg
-  const xmlClean = String(xmlAssinado || "")
-    .replace(/^\s*<\?xml[^>]*\?>\s*/i, "")
-    .trim();
 
-  // 2) lote 15 dígitos
-  const idLote = String(Date.now()).slice(-15).padStart(15, "0");
+  async transmit(xmlAssinado, tpAmb = 2, cUF = 35) {
+    const xmlClean = String(xmlAssinado || "").replace(/^\s*<\?xml[^>]*\?>\s*/i, "").trim();
+    const idLote = String(Date.now()).slice(-15).padStart(15, "0");
 
-  // 3) IMPORTANTÍSSIMO: sem quebras/indentação aqui
-  const enviNFe =
-    `<enviNFe xmlns="http://www.portalfiscal.inf.br/nfe" versao="4.00">` +
-      `<idLote>${idLote}</idLote>` +
-      `<indSinc>1</indSinc>` +
-      `${xmlClean}` +
-    `</enviNFe>`;
+    const enviNFe =
+      `<enviNFe xmlns="http://www.portalfiscal.inf.br/nfe" versao="4.00">` +
+        `<idLote>${idLote}</idLote>` +
+        `<indSinc>1</indSinc>` +
+        `${xmlClean}` +
+      `</enviNFe>`;
 
-  // 4) IMPORTANTÍSSIMO: SOAP sem \n / \t / espaços entre tags
-  const action = "http://www.portalfiscal.inf.br/nfe/wsdl/NFeAutorizacao4/nfeAutorizacaoLote";
+    const action = "http://www.portalfiscal.inf.br/nfe/wsdl/NFeAutorizacao4/nfeAutorizacaoLote";
 
-  const envelope =
-    `<soap12:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap12="http://www.w3.org/2003/05/soap-envelope">` +
-      `<soap12:Header>` +
-        `<nfeCabecMsg xmlns="http://www.portalfiscal.inf.br/nfe/wsdl/NFeAutorizacao4">` +
-          `<cUF>${cUF}</cUF>` +
-          `<versaoDados>4.00</versaoDados>` +
-        `</nfeCabecMsg>` +
-      `</soap12:Header>` +
-      `<soap12:Body>` +
-        `<nfeDadosMsg xmlns="http://www.portalfiscal.inf.br/nfe/wsdl/NFeAutorizacao4">` +
-          `${enviNFe}` +
-        `</nfeDadosMsg>` +
-      `</soap12:Body>` +
-    `</soap12:Envelope>`;
+    const envelope =
+      `<soap12:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap12="http://www.w3.org/2003/05/soap-envelope">` +
+        `<soap12:Header>` +
+          `<nfeCabecMsg xmlns="http://www.portalfiscal.inf.br/nfe/wsdl/NFeAutorizacao4">` +
+            `<cUF>${cUF}</cUF>` +
+            `<versaoDados>4.00</versaoDados>` +
+          `</nfeCabecMsg>` +
+        `</soap12:Header>` +
+        `<soap12:Body>` +
+          `<nfeDadosMsg xmlns="http://www.portalfiscal.inf.br/nfe/wsdl/NFeAutorizacao4">` +
+            `${enviNFe}` +
+          `</nfeDadosMsg>` +
+        `</soap12:Body>` +
+      `</soap12:Envelope>`;
 
-  const url = tpAmb === 1
-    ? "https://nfe.fazenda.sp.gov.br/ws/nfeautorizacao4.asmx"
-    : "https://homologacao.nfe.fazenda.sp.gov.br/ws/nfeautorizacao4.asmx";
+    const url = tpAmb === 1
+      ? "https://nfe.fazenda.sp.gov.br/ws/nfeautorizacao4.asmx"
+      : "https://homologacao.nfe.fazenda.sp.gov.br/ws/nfeautorizacao4.asmx";
 
-  try {
-    const res = await axios.post(url, envelope, {
-      headers: {
-        "Content-Type": `application/soap+xml; charset=utf-8; action="${action}"`,
-        "SOAPAction": `"${action}"`,
-      },
-      httpsAgent: this.httpsAgent,
-      timeout: 30000,
-      maxBodyLength: Infinity,
-      maxContentLength: Infinity,
-      // garante que o axios não “formate” nada
-      transformRequest: [(data) => data],
-    });
-
-    return res.data;
-  } catch (error) {
-    if (error.response) {
-      const body = typeof error.response.data === "string"
-        ? error.response.data
-        : JSON.stringify(error.response.data);
-      throw new Error(`Erro conexão SEFAZ: HTTP ${error.response.status} - ${body.slice(0, 2000)}`);
+    try {
+      const res = await axios.post(url, envelope, {
+        headers: {
+          "Content-Type": `application/soap+xml; charset=utf-8; action="${action}"`,
+          "SOAPAction": `"${action}"`,
+        },
+        httpsAgent: this.httpsAgent,
+        timeout: 30000,
+        maxBodyLength: Infinity,
+        maxContentLength: Infinity,
+        transformRequest: [(d) => d],
+      });
+      return res.data;
+    } catch (error) {
+      if (error.response) {
+        const body = typeof error.response.data === "string"
+          ? error.response.data
+          : JSON.stringify(error.response.data);
+        throw new Error(`Erro conexão SEFAZ: HTTP ${error.response.status} - ${body.slice(0, 2000)}`);
+      }
+      throw new Error(`Erro conexão SEFAZ: ${error.message}`);
     }
-    throw new Error(`Erro conexão SEFAZ: ${error.message}`);
   }
 }
-}
+
 
 // --- Helper for status enum mapping ---
 const statusMap = {
