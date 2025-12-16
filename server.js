@@ -372,6 +372,7 @@ async transmit(xmlAssinado, tpAmb = 2, cUF = 35) {
     throw new Error(`Erro conexão SEFAZ: ${error.message}`);
   }
 }
+}
 
 // --- Helper for status enum mapping ---
 const statusMap = {
