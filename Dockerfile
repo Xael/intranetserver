@@ -1,40 +1,71 @@
-# Estágio 1: Base com Node.js
-# 'bullseye-slim' para melhor compatibilidade de bibliotecas
-FROM node:20-bullseye-slim AS base
+FROM node:20-bullseye-slim
 
-# Define o diretório de trabalho dentro do contêiner
 WORKDIR /app
 
-# ✅ Instala CA tools e adiciona a raiz ICP-Brasil v10 ao trust store do Linux
+# Pacotes necessários + CA store
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl openssl \
- && rm -rf /var/lib/apt/lists/*
+  && rm -rf /var/lib/apt/lists/*
 
-# ✅ Baixa a Raiz ICP-Brasil v10 e registra no sistema (robusto: DER ou PEM)
-RUN set -eux; \
-  curl -fsSL -L "https://acraiz.icpbrasil.gov.br/ICP-Brasilv10.crt" -o /tmp/icpbrv10.crt; \
-  (openssl x509 -inform DER -in /tmp/icpbrv10.crt -out /usr/local/share/ca-certificates/icpbr-root-v10.pem \
-   || openssl x509 -in /tmp/icpbrv10.crt -out /usr/local/share/ca-certificates/icpbr-root-v10.pem); \
-  update-ca-certificates; \
-  rm -f /tmp/icpbrv10.crt
+# ✅ Instala a CA que assina o certificado da SEFAZ-SP (homologação)
+# (AC SOLUTI SSL EV G4) — extraída do seu openssl s_client
+RUN cat > /usr/local/share/ca-certificates/ac-soluti-ssl-ev-g4.crt <<'EOF'
+-----BEGIN CERTIFICATE-----
+MIIHtDCCBZygAwIBAgIJANjGl6F55VD+MA0GCSqGSIb3DQEBDQUAMIGYMQswCQYD
+VQQGEwJCUjETMBEGA1UECgwKSUNQLUJyYXNpbDE9MDsGA1UECww0SW5zdGl0dXRv
+IE5hY2lvbmFsIGRlIFRlY25vbG9naWEgZGEgSW5mb3JtYWNhbyAtIElUSTE1MDMG
+A1UEAwwsQXV0b3JpZGFkZSBDZXJ0aWZpY2Fkb3JhIFJhaXogQnJhc2lsZWlyYSB2
+MTAwHhcNMjMwMzIyMTgwOTExWhcNMzIwNzAxMTIwMDU5WjB3MQswCQYDVQQGEwJC
+UjETMBEGA1UEChMKSUNQLUJyYXNpbDE1MDMGA1UECxMsQXV0b3JpZGFkZSBDZXJ0
+aWZpY2Fkb3JhIFJhaXogQnJhc2lsZWlyYSB2MTAxHDAaBgNVBAMTE0FDIFNPTFVU
+SSBTU0wgRVYgRzQwggIiMA0GCSqGSIb3DQEBAQUAA4ICDwAwggIKAoICAQDHv3Kv
+oEPrNrzImIPn17GI5vdoVxghsm6EVLMUjnM4JdCpDED+0BqZF0kycyZaiWt7jqSR
+vcGm66RKzSGcHJlUgahp9qcXAmSwMn00pwvgBKb+4htp48vQc1/5MWpaBzQW4Di/
+tWvNkh9URtMyhtltf2u3s9r5vgF12ff7mCu3oj0bDBIaGs/a9EtMKoCfw/ziKUp7
+11JYu1fbIWVOgbW9iHE24oiE33LGLm+uToCWpjGL3n9D+q+ryfIYFoes6gPCYYSt
+udDUB9lfpe83IOVcVslL3DmYd2oEncGCogO3qzaMSH3OVLMO4Rg5edERpMw5U0tA
+MeyO0k5/tmnFfUM476lZl+ce2Ol56p7R2yjKxHJizeCOSmwDE5FXz7ll+Zq9C7QW
+UzoPQtyT739UGEeBRTAz4KsO77frCtdifGRvX3lMfI8qeMnfvf08BK9e2dRkCHwD
+iv23Aw7QIixDS9PiSsMxObgjHwroEqAAN2Mwz1B1zAuzZVUH7k6MyQQ/II/GDUpT
+jT4VKnhjdIfz5aEFHx7By2XjMkx1hyeONLS/2SoDnKitE9yY/PASqWDCPCpSoJ+x
+fEdyZvoawEbJfL+CMhU5I7IXgf9f7gibghIc2CG4bf6dfVAdPcGkYkcjw21dtq/G
+1V2dHpOX67BbihThAVr8Z7NTgVAv4nC6MPpAywIDAQABo4ICHzCCAhswggEHBgNV
+HSAEgf8wgfwwQwYFYEwBAQAwOjA4BggrBgEFBQcCARYsaHR0cDovL2FjcmFpei5p
+Y3BicmFzaWwuZ292LmJyL0RQQ2FjcmFpei5wZGYwUAYGYEwBAYECMEYwRAYIKwYB
+BQUHAgEWOGh0dHA6Ly9jY2QuYWNzb2x1dGkuY29tLmJyL2RvY3MvZHBjLWFjLXNv
+bHV0aS1zc2wtZXYucGRmMFAGBmBMAQIBcDBGMEQGCCsGAQUFBwIBFjhodHRwOi8v
+Y2NkLmFjc29sdXRpLmNvbS5ici9kb2NzL2RwYy1hYy1zb2x1dGktc3NsLWV2LnBk
+ZjAHBgVngQwBATAIBgZngQwBAgIwQAYDVR0fBDkwNzA1oDOgMYYvaHR0cDovL2Fj
+cmFpei5pY3BicmFzaWwuZ292LmJyL0xDUmFjcmFpenYxMC5jcmwwHwYDVR0jBBgw
+FoAUdPN+//yfU3rxfOurPqSm2hi6RWMwHQYDVR0OBBYEFP4GuSyVfi/m0Lio8S+3
+8i6F1dfAMA8GA1UdEwEB/wQFMAMBAf8wDgYDVR0PAQH/BAQDAgGGMB0GA1UdJQQW
+MBQGCCsGAQUFBwMBBggrBgEFBQcDAjBMBggrBgEFBQcBAQRAMD4wPAYIKwYBBQUH
+MAKGMGh0dHA6Ly9hY3JhaXouaWNwYnJhc2lsLmdvdi5ici9JQ1AtQnJhc2lsdjEw
+LmNydDANBgkqhkiG9w0BAQ0FAAOCAgEAABxayeHitwL18QeXSQvRZ2eiNb82IlYT
+uvER4JRMzZDWoamKOqmD7KXSSj+sdBThYiRkkNiVFiMn2qoYAdylI2I4w1npbxyr
+ukfXQ7tadTEiMCFva0uHHw9lpBx+oyy9rcLM7qC5qquksyhC222Yt3WbqC6Fla+L
+o3GlTOpogqexeyc9hgvAQxeMmq+xyDcjSLzKmmRmMKQ9y3w7wpufXTO/0K5uOLLZ
+sfyXZTw+MYYeIk2+GNv1qQBbWo3gmwlD1W0pJEHe+/KxiCRkDHpJY7Lk2Rm4bSDZ
+Rr4Bn8bk/XJWpiu7Fm9b8piPKjTtstDYTzu40ccPRh9UCWDUz4nKF97dXjIgYf+a
+TA0vnKdlnpPUDeBVpfyXavhGf/akFh5AO7/v6xkzWOUlawn5g614mWhOQ6ITwmua
+y1spnpBO684d0bynFQfMoZGS5fdKoYKKDzp29xhBm3s9WD1f/oP79Ie0eDribpOv
+j3Xsjz72MTG4+UVxuv0OIYuXDc8x1foMzVOco6DxuLel6KG5RH+m0tWmX4ouCgBK
+TNUQC70AWHBa4PCF5YA7H8qVnH2EUBPo3rxOY0wN6GzyMbg9+D9l5e2Xcg7/ytqY
+BIBnZKLPjzS3OqUsM9UgUKGwcEnaHnmRxH8vyVEMGnoK1cZNf9uDM9sMGgQUzKwV
+wixwyINOM8U=
+-----END CERTIFICATE-----
+EOF
 
-# ✅ Faz o Node confiar explicitamente nessa CA extra (resolve axios/https)
-ENV NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/icpbr-root-v10.pem
+RUN update-ca-certificates
 
-# Copia os arquivos de definição de dependências
+# ✅ Faz o Node confiar também (Node usa CA própria, então isso é importante)
+ENV NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/ac-soluti-ssl-ev-g4.crt
+
 COPY package*.json ./
-
-# Instala SOMENTE as dependências de produção.
 RUN npm install --production
 
-# Copia o restante do código da aplicação, incluindo o schema do Prisma
 COPY . .
-
-# *** PASSO CRUCIAL PARA O PRISMA ***
 RUN npx prisma generate
 
-# Expõe a porta que o servidor vai usar
 EXPOSE 3001
-
-# Comando para iniciar o servidor quando o contêiner rodar
 CMD ["node", "server.js"]
