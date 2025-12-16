@@ -27,31 +27,45 @@ const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-key-that-is-long
 
 // --- CLASSE NFeService (EMBUTIDA) ---
 class NFeService {
-    constructor(pfxBuffer, senhaCertificado) {
-        if (!pfxBuffer || !senhaCertificado) {
-            throw new Error("Certificado ou senha não fornecidos.");
-        }
+constructor(pfxBuffer, senhaCertificado) {
+  if (!pfxBuffer || !senhaCertificado) {
+    throw new Error("Certificado ou senha não fornecidos.");
+  }
 
-        this.pfxBuffer = pfxBuffer;
-        this.senha = senhaCertificado;
+  this.pfxBuffer = pfxBuffer;
+  this.senha = senhaCertificado;
 
-        try {
-            // Extrair chave privada para assinatura
-            const p12Asn1 = forge.asn1.fromDer(this.pfxBuffer.toString('binary'));
-            const p12 = forge.pkcs12.pkcs12FromAsn1(p12Asn1, false, this.senha);
-            const keyData = p12.getBags({ bagType: forge.pki.oids.pkcs8ShroudedKeyBag })[forge.pki.oids.pkcs8ShroudedKeyBag][0];
-            this.privateKeyPem = forge.pki.privateKeyToPem(keyData.key);
-        } catch (e) {
-            throw new Error("Senha do certificado incorreta ou arquivo inválido.");
-        }
+  try {
+    // Lê PKCS12 com forge
+    const p12Asn1 = forge.asn1.fromDer(this.pfxBuffer.toString('binary'));
+    const p12 = forge.pkcs12.pkcs12FromAsn1(p12Asn1, false, this.senha);
 
-        // Agente HTTPS para conexão mútua com a SEFAZ
-        this.httpsAgent = new https.Agent({
-            pfx: this.pfxBuffer,
-            passphrase: this.senha,
-            rejectUnauthorized: false
-        });
-    }
+    // Chave privada
+    const keyBags = p12.getBags({ bagType: forge.pki.oids.pkcs8ShroudedKeyBag })[forge.pki.oids.pkcs8ShroudedKeyBag];
+    const keyData = keyBags?.[0];
+    if (!keyData?.key) throw new Error('Chave privada não encontrada no certificado.');
+    this.privateKeyPem = forge.pki.privateKeyToPem(keyData.key);
+
+    // Certificados (cadeia)
+    const certBags = p12.getBags({ bagType: forge.pki.oids.certBag })[forge.pki.oids.certBag] || [];
+    if (!certBags.length) throw new Error('Certificado não encontrado no PFX.');
+
+    // Monta cadeia em PEM (cert do cliente + intermediários se existirem)
+    const certChainPem = certBags.map(b => forge.pki.certificateToPem(b.cert)).join('\n');
+    this.certChainPem = certChainPem;
+
+  } catch (e) {
+    throw new Error("Senha do certificado incorreta ou arquivo inválido.");
+  }
+
+  // ✅ IMPORTANTE: usar key+cert (PEM) evita o erro "Unsupported PKCS12 PFX data"
+  this.httpsAgent = new https.Agent({
+    key: this.privateKeyPem,
+    cert: this.certChainPem,
+    rejectUnauthorized: false
+  });
+}
+
 
     generateXML(data) {
         const now = new Date();
