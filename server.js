@@ -1,6 +1,6 @@
-const { parseString } = require('xml2js');
-const { promisify } = require('util');
-const parseXml = promisify(parseString);
+const { parseStringPromise } = require('xml2js');
+const parseXml = (xml, opts) => parseStringPromise(xml, opts);
+
 // A LINHA ABAIXO FOI REMOVIDA PARA CORRIGIR O ERRO MODULE_NOT_FOUND
 // const NFeService = require('./services/NFeService'); 
 
@@ -62,7 +62,7 @@ constructor(pfxBuffer, senhaCertificado) {
   this.httpsAgent = new https.Agent({
     key: this.privateKeyPem,
     cert: this.certChainPem,
-    rejectUnauthorized: false
+    rejectUnauthorized: true
   });
 }
 
@@ -79,7 +79,7 @@ constructor(pfxBuffer, senhaCertificado) {
                     '@versao': '4.00',
                     ide: {
                         cUF: 35, // SP (Ajustar conforme estado do emitente)
-                        cNF: data.numero,
+                        cNF: String(Math.floor(Math.random() * 99999999)).padStart(8, '0'),
                         natOp: 'VENDA DE MERCADORIA',
                         mod: 55,
                         serie: data.serie,
@@ -1507,19 +1507,63 @@ app.post('/api/nfe/transmitir', authenticateToken, async (req, res) => {
         const cUF = 35;
 
         const retornoSefaz = await service.transmit(xmlAssinado, tpAmb, cUF);
+        console.log("RETORNO SEFAZ (inicio):", String(retornoSefaz).slice(0, 1200));
 
 
         // 5. Processamento da Resposta da SEFAZ (cStat)
+        //const result = await parseXml(retornoSefaz, { explicitArray: false });
+        // A estrutura do XML de resposta (SOAP) é complexa. O caminho abaixo é o padrão:
+        //const nfeAutorizacaoResult = result['soap12:Envelope']['soap12:Body']['nfeAutorizacaoLoteResult']['retEnviNFe']; **** CORRIGINDO
+
         const result = await parseXml(retornoSefaz, { explicitArray: false });
 
-        // A estrutura do XML de resposta (SOAP) é complexa. O caminho abaixo é o padrão:
-        const nfeAutorizacaoResult = result['soap12:Envelope']['soap12:Body']['nfeAutorizacaoLoteResult']['retEnviNFe'];
-        const protNFe = nfeAutorizacaoResult?.protNFe;
+// ✅ acha Envelope sem depender do prefixo soap12:
+const envelopeKey = Object.keys(result).find(k => k.toLowerCase().includes('envelope'));
+const envelope = envelopeKey ? result[envelopeKey] : null;
 
-        const cStat = nfeAutorizacaoResult?.cStat || (protNFe ? protNFe.infProt.cStat : null);
-        const xMotivo = nfeAutorizacaoResult?.xMotivo || (protNFe ? protNFe.infProt.xMotivo : "Erro desconhecido");
-        const protocolo = protNFe ? protNFe.infProt.nProt : null;
+if (!envelope) {
+  throw new Error("Resposta SEFAZ sem Envelope SOAP. Retorno: " + String(retornoSefaz).slice(0, 800));
+}
 
+// ✅ acha Body sem depender do prefixo soap12:
+const bodyKey = Object.keys(envelope).find(k => k.toLowerCase().includes('body'));
+const body = bodyKey ? envelope[bodyKey] : null;
+
+if (!body) {
+  throw new Error("Resposta SEFAZ sem Body SOAP. Retorno: " + String(retornoSefaz).slice(0, 800));
+}
+
+// ✅ tenta localizar o nó de retorno (varia conforme servidor)
+const resultKey =
+  Object.keys(body).find(k => k.toLowerCase().includes('nfeautorizacaoloteresult')) ||
+  Object.keys(body).find(k => k.toLowerCase().includes('nfeautorizacaoloteresponse')) ||
+  Object.keys(body)[0];
+
+const resultNode = resultKey ? body[resultKey] : null;
+
+if (!resultNode) {
+  throw new Error("Resposta SEFAZ: Body sem nó de resultado. Retorno: " + String(retornoSefaz).slice(0, 800));
+}
+
+// ✅ agora busca retEnviNFe em qualquer nível esperado
+const retEnviNFe =
+  resultNode?.retEnviNFe ||
+  resultNode?.nfeAutorizacaoLoteResult?.retEnviNFe ||
+  resultNode?.nfeAutorizacaoLoteResponse?.retEnviNFe;
+
+if (!retEnviNFe) {
+  // Ajuda MUITO a depurar porque mostra as chaves disponíveis
+  const keys = Object.keys(resultNode || {});
+  throw new Error("Não encontrei retEnviNFe na resposta. Chaves encontradas: " + keys.join(', '));
+}
+
+const protNFe = retEnviNFe?.protNFe;
+
+const cStat = retEnviNFe?.cStat || (protNFe ? protNFe.infProt.cStat : null);
+const xMotivo = retEnviNFe?.xMotivo || (protNFe ? protNFe.infProt.xMotivo : "Erro desconhecido");
+const protocolo = protNFe ? protNFe.infProt.nProt : null;
+
+      
         let newStatus = 'error';
         let responseJson = {};
 
