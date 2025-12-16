@@ -257,6 +257,7 @@ constructor(pfxBuffer, senhaCertificado) {
     throw new Error(`Erro conexão SEFAZ: ${error.message}`);
   }
 }
+}
 
 
 // --- Helper for status enum mapping ---
