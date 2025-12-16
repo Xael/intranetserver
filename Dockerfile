@@ -10,11 +10,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl openssl \
  && rm -rf /var/lib/apt/lists/*
 
-# ✅ Baixa a Raiz ICP-Brasil v10 (DER) e converte pra PEM, registra no sistema
-RUN curl -fsSL "http://acraiz.icpbrasil.gov.br/ICP-Brasilv10.crt" -o /tmp/icpbrv10.crt \
- && openssl x509 -inform DER -in /tmp/icpbrv10.crt -out /usr/local/share/ca-certificates/icpbr-root-v10.pem \
- && update-ca-certificates \
- && rm -f /tmp/icpbrv10.crt
+# ✅ Baixa a Raiz ICP-Brasil v10 e registra no sistema (robusto: DER ou PEM)
+RUN set -eux; \
+  curl -fsSL -L "https://acraiz.icpbrasil.gov.br/ICP-Brasilv10.crt" -o /tmp/icpbrv10.crt; \
+  (openssl x509 -inform DER -in /tmp/icpbrv10.crt -out /usr/local/share/ca-certificates/icpbr-root-v10.pem \
+   || openssl x509 -in /tmp/icpbrv10.crt -out /usr/local/share/ca-certificates/icpbr-root-v10.pem); \
+  update-ca-certificates; \
+  rm -f /tmp/icpbrv10.crt
 
 # ✅ Faz o Node confiar explicitamente nessa CA extra (resolve axios/https)
 ENV NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/icpbr-root-v10.pem
