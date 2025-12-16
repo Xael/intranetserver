@@ -27,237 +27,353 @@ const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-key-that-is-long
 
 // --- CLASSE NFeService (EMBUTIDA) ---
 class NFeService {
-constructor(pfxBuffer, senhaCertificado) {
-  if (!pfxBuffer || !senhaCertificado) {
-    throw new Error("Certificado ou senha não fornecidos.");
-  }
-
-  this.pfxBuffer = pfxBuffer;
-  this.senha = senhaCertificado;
-
-  try {
-    // Lê PKCS12 com forge
-    const p12Asn1 = forge.asn1.fromDer(this.pfxBuffer.toString('binary'));
-    const p12 = forge.pkcs12.pkcs12FromAsn1(p12Asn1, false, this.senha);
-
-    // Chave privada
-    const keyBags = p12.getBags({ bagType: forge.pki.oids.pkcs8ShroudedKeyBag })[forge.pki.oids.pkcs8ShroudedKeyBag];
-    const keyData = keyBags?.[0];
-    if (!keyData?.key) throw new Error('Chave privada não encontrada no certificado.');
-    this.privateKeyPem = forge.pki.privateKeyToPem(keyData.key);
-
-    // Certificados (cadeia)
-    const certBags = p12.getBags({ bagType: forge.pki.oids.certBag })[forge.pki.oids.certBag] || [];
-    if (!certBags.length) throw new Error('Certificado não encontrado no PFX.');
-
-    // Monta cadeia em PEM (cert do cliente + intermediários se existirem)
-    const certChainPem = certBags.map(b => forge.pki.certificateToPem(b.cert)).join('\n');
-    this.certChainPem = certChainPem;
-
-  } catch (e) {
-    throw new Error("Senha do certificado incorreta ou arquivo inválido.");
-  }
-
-  // ✅ IMPORTANTE: usar key+cert (PEM) evita o erro "Unsupported PKCS12 PFX data"
-  this.httpsAgent = new https.Agent({
-    key: this.privateKeyPem,
-    cert: this.certChainPem,
-    rejectUnauthorized: true
-  });
-}
-
-
-    generateXML(data) {
-        const now = new Date();
-        const dhEmi = new Date(now.getTime() - (now.getTimezoneOffset() * 60000)).toISOString().slice(0, 19) + '-03:00';
-
-        const nfe = {
-            NFe: {
-                '@xmlns': 'http://www.portalfiscal.inf.br/nfe',
-                infNFe: {
-                    '@Id': `NFe${data.chaveAcesso}`,
-                    '@versao': '4.00',
-                    ide: {
-                        cUF: 35, // SP (Ajustar conforme estado do emitente)
-                        cNF: String(Math.floor(Math.random() * 99999999)).padStart(8, '0'),
-                        natOp: 'VENDA DE MERCADORIA',
-                        mod: 55,
-                        serie: data.serie,
-                        nNF: data.numero,
-                        dhEmi: dhEmi,
-                        tpNF: 1,
-                        idDest: 1,
-                        cMunFG: data.emitente.endereco.codigoIbge,
-                        tpImp: 1,
-                        tpEmis: 1,
-                        cDV: data.chaveAcesso ? data.chaveAcesso.slice(-1) : '0',
-                        tpAmb: 2, // 2 = Homologação
-                        finNFe: 1,
-                        indFinal: 1,
-                        indPres: 1,
-                        procEmi: 0,
-                        verProc: 'APP_NFE_NODE'
-                    },
-                    emit: {
-                        CNPJ: data.emitente.cnpj.replace(/\D/g, ''),
-                        xNome: data.emitente.razaoSocial,
-                        enderEmit: {
-                            xLgr: data.emitente.endereco.logradouro,
-                            nro: data.emitente.endereco.numero,
-                            xBairro: data.emitente.endereco.bairro,
-                            cMun: data.emitente.endereco.codigoIbge,
-                            xMun: data.emitente.endereco.municipio,
-                            UF: data.emitente.endereco.uf,
-                            CEP: data.emitente.endereco.cep,
-                            cPais: 1058,
-                            xPais: 'BRASIL'
-                        },
-                        IE: data.emitente.inscricaoEstadual.replace(/\D/g, ''),
-                        CRT: data.emitente.crt
-                    },
-                    dest: {
-                        CNPJ: data.destinatario.cnpj.replace(/\D/g, ''),
-                        xNome: data.destinatario.razaoSocial,
-                        enderDest: {
-                            xLgr: data.destinatario.endereco.logradouro,
-                            nro: data.destinatario.endereco.numero,
-                            xBairro: data.destinatario.endereco.bairro,
-                            cMun: data.destinatario.endereco.codigoIbge,
-                            xMun: data.destinatario.endereco.municipio,
-                            UF: data.destinatario.endereco.uf,
-                            CEP: data.destinatario.endereco.cep,
-                            cPais: 1058,
-                            xPais: 'BRASIL'
-                        },
-                        indIEDest: 9
-                    },
-                    det: data.produtos.map((prod, i) => ({
-                        '@nItem': i + 1,
-                        prod: {
-                            cProd: prod.codigo,
-                            cEAN: "SEM GTIN",
-                            xProd: prod.descricao,
-                            NCM: prod.ncm,
-                            CFOP: prod.cfop,
-                            uCom: prod.unidade,
-                            qCom: prod.quantidade,
-                            vUnCom: prod.valorUnitario.toFixed(4),
-                            vProd: prod.valorTotal.toFixed(2),
-                            cEANTrib: "SEM GTIN",
-                            uTrib: prod.unidade,
-                            qTrib: prod.quantidade,
-                            vUnTrib: prod.valorUnitario.toFixed(4),
-                            indTot: 1
-                        },
-                        imposto: {
-                            ICMS: { ICMSSN102: { orig: 0, CSOSN: '102' } },
-                            PIS: { PISNT: { CST: '07' } },
-                            COFINS: { COFINSNT: { CST: '07' } }
-                        }
-                    })),
-                    total: {
-                        ICMSTot: {
-                            vBC: '0.00', vICMS: '0.00', vICMSDeson: '0.00',
-                            vFCP: '0.00', vBCST: '0.00', vST: '0.00',
-                            vFCPST: '0.00', vFCPSTRet: '0.00',
-                            vProd: data.totais.vProd.toFixed(2),
-                            vFrete: '0.00', vSeg: '0.00', vDesc: '0.00',
-                            vII: '0.00', vIPI: '0.00', vIPIDevol: '0.00',
-                            vPIS: '0.00', vCOFINS: '0.00', vOutro: '0.00',
-                            vNF: data.totais.vNF.toFixed(2)
-                        }
-                    },
-                    transp: { modFrete: 9 }
-                }
-            }
-        };
-
-        return create(nfe).end({ prettyPrint: false });
+  constructor(pfxBuffer, senhaCertificado) {
+    if (!pfxBuffer || !senhaCertificado) {
+      throw new Error("Certificado ou senha não fornecidos.");
     }
 
-    signXML(xml) {
-        const sig = new SignedXml();
-        sig.addReference("//*[local-name(.)='infNFe']",
-            ["http://www.w3.org/2000/09/xmldsig#enveloped-signature", "http://www.w3.org/TR/2001/REC-xml-c14n-20010315"],
-            "http://www.w3.org/2000/09/xmldsig#sha1");
-        
-        sig.signingKey = this.privateKeyPem;
-        sig.canonicalizationAlgorithm = "http://www.w3.org/TR/2001/REC-xml-c14n-20010315";
-        sig.signatureAlgorithm = "http://www.w3.org/2000/09/xmldsig#rsa-sha1";
-        
-        sig.computeSignature(xml);
-        return sig.getSignedXml();
+    this.pfxBuffer = pfxBuffer;
+    this.senha = senhaCertificado;
+
+    try {
+      const p12Asn1 = forge.asn1.fromDer(this.pfxBuffer.toString("binary"));
+      const p12 = forge.pkcs12.pkcs12FromAsn1(p12Asn1, false, this.senha);
+
+      // Chave privada
+      const keyBags =
+        p12.getBags({ bagType: forge.pki.oids.pkcs8ShroudedKeyBag })[
+          forge.pki.oids.pkcs8ShroudedKeyBag
+        ];
+      const keyData = keyBags?.[0];
+      if (!keyData?.key) throw new Error("Chave privada não encontrada no certificado.");
+      this.privateKeyPem = forge.pki.privateKeyToPem(keyData.key);
+
+      // Certificados
+      const certBags =
+        p12.getBags({ bagType: forge.pki.oids.certBag })[forge.pki.oids.certBag] || [];
+      if (!certBags.length) throw new Error("Certificado não encontrado no PFX.");
+
+      // Cadeia PEM (cliente + intermediários)
+      this.certChainPem = certBags.map((b) => forge.pki.certificateToPem(b.cert)).join("\n");
+
+      // Leaf cert (para X509Certificate no KeyInfo)
+      const leafCert = certBags[0].cert;
+      const asn1Cert = forge.pki.certificateToAsn1(leafCert);
+      const derBytes = forge.asn1.toDer(asn1Cert).getBytes();
+      this.leafCertBase64 = forge.util.encode64(derBytes);
+
+    } catch (e) {
+      throw new Error("Senha do certificado incorreta ou arquivo inválido.");
     }
 
-    async transmit(xmlAssinado, tpAmb = 2, cUF = 35) {
-  // Remove declaração XML se existir (não pode existir dentro do <nfeDadosMsg>)
-  const xmlClean = String(xmlAssinado || '')
-    .replace(/^\s*<\?xml[^>]*\?>\s*/i, '')
-    .trim();
+    this.httpsAgent = new https.Agent({
+      key: this.privateKeyPem,
+      cert: this.certChainPem,
+      rejectUnauthorized: true,
+      minVersion: "TLSv1.2",
+    });
+  }
 
-  // Monta enviNFe (lote)
-  const idLote = String(Date.now()).slice(-15); // 15 dígitos
-  const enviNFe = `
-    <enviNFe xmlns="http://www.portalfiscal.inf.br/nfe" versao="4.00">
-      <idLote>${idLote}</idLote>
-      <indSinc>1</indSinc>
-      ${xmlClean}
-    </enviNFe>
-  `.trim();
+  // ---------- helpers ----------
+  onlyDigits(v) {
+    return String(v ?? "").replace(/\D/g, "");
+  }
+  fixed(v, dec) {
+    const n = Number(String(v ?? "0").replace(",", "."));
+    if (!Number.isFinite(n)) return (0).toFixed(dec);
+    return n.toFixed(dec);
+  }
+  cep8(v) {
+    const d = this.onlyDigits(v);
+    return d.padStart(8, "0").slice(0, 8);
+  }
+  ncm8(v) {
+    const d = this.onlyDigits(v);
+    return d.padStart(8, "0").slice(0, 8);
+  }
+  cfop4(v) {
+    const d = this.onlyDigits(v);
+    return d.slice(0, 4);
+  }
+  ibge7(v) {
+    const d = this.onlyDigits(v);
+    return d.slice(0, 7);
+  }
 
-  const envelope = `
-    <soap12:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-                     xmlns:xsd="http://www.w3.org/2001/XMLSchema"
-                     xmlns:soap12="http://www.w3.org/2003/05/soap-envelope">
-      <soap12:Header>
-        <nfeCabecMsg xmlns="http://www.portalfiscal.inf.br/nfe/wsdl/NFeAutorizacao4">
-          <cUF>${cUF}</cUF>
-          <versaoDados>4.00</versaoDados>
-        </nfeCabecMsg>
-      </soap12:Header>
-      <soap12:Body>
-        <nfeDadosMsg xmlns="http://www.portalfiscal.inf.br/nfe/wsdl/NFeAutorizacao4">
-          ${enviNFe}
-        </nfeDadosMsg>
-      </soap12:Body>
-    </soap12:Envelope>
-  `.trim();
+  // ---------- XML ----------
+  generateXML(data) {
+    // Validações que evitam 225
+    const chave = this.onlyDigits(data?.chaveAcesso);
+    if (!/^\d{44}$/.test(chave)) {
+      throw new Error(`Chave de acesso inválida. Precisa ter 44 dígitos. Recebido: "${data?.chaveAcesso}"`);
+    }
 
-  // URLs SP (homologação/produção)
-  // Homologação: https://homologacao.nfe.fazenda.sp.gov.br/ws/nfeautorizacao4.asmx
-  // Produção:    https://nfe.fazenda.sp.gov.br/ws/nfeautorizacao4.asmx
-  // (SEFAZ-SP publica exatamente essas URLs) :contentReference[oaicite:1]{index=1}
-  const url = tpAmb === 1
-    ? 'https://nfe.fazenda.sp.gov.br/ws/nfeautorizacao4.asmx'
-    : 'https://homologacao.nfe.fazenda.sp.gov.br/ws/nfeautorizacao4.asmx';
+    const emitCNPJ = this.onlyDigits(data?.emitente?.cnpj);
+    const destCNPJ = this.onlyDigits(data?.destinatario?.cnpj);
 
-  // SOAPAction / action (ajuda em vários endpoints .asmx)
-  const action = 'http://www.portalfiscal.inf.br/nfe/wsdl/NFeAutorizacao4/nfeAutorizacaoLote';
+    const emitCEP = this.cep8(data?.emitente?.endereco?.cep);
+    const destCEP = this.cep8(data?.destinatario?.endereco?.cep);
 
-  try {
-    const res = await axios.post(url, envelope, {
-      headers: {
-        'Content-Type': `application/soap+xml; charset=utf-8; action="${action}"`,
-        'SOAPAction': `"${action}"`
+    const emitIE = this.onlyDigits(data?.emitente?.inscricaoEstadual);
+
+    const cMunEmit = this.ibge7(data?.emitente?.endereco?.codigoIbge);
+    const cMunDest = this.ibge7(data?.destinatario?.endereco?.codigoIbge);
+
+    if (emitCEP.length !== 8) throw new Error("CEP do emitente inválido (precisa 8 dígitos).");
+    if (destCEP.length !== 8) throw new Error("CEP do destinatário inválido (precisa 8 dígitos).");
+    if (!emitCNPJ || emitCNPJ.length !== 14) throw new Error("CNPJ do emitente inválido.");
+    if (!destCNPJ || destCNPJ.length !== 14) throw new Error("CNPJ do destinatário inválido.");
+    if (!cMunEmit) throw new Error("Código IBGE do município do emitente inválido.");
+    if (!cMunDest) throw new Error("Código IBGE do município do destinatário inválido.");
+    if (!emitIE) throw new Error("IE do emitente inválida/vazia.");
+
+    const now = new Date();
+    const dhEmi = new Date(now.getTime() - now.getTimezoneOffset() * 60000)
+      .toISOString()
+      .slice(0, 19) + "-03:00";
+
+    const serie = String(Number(data?.serie || 1));
+    const nNF = String(Number(data?.numero || 1));
+
+    const vProdTotal = Number(data?.totais?.vProd || 0);
+    const vNFTotal = Number(data?.totais?.vNF || vProdTotal);
+
+    const nfe = {
+      NFe: {
+        "@xmlns": "http://www.portalfiscal.inf.br/nfe",
+        infNFe: {
+          "@Id": `NFe${chave}`,
+          "@versao": "4.00",
+          ide: {
+            cUF: "35", // SP
+            cNF: String(Math.floor(Math.random() * 99999999)).padStart(8, "0"),
+            natOp: data?.natOp || "VENDA DE MERCADORIA",
+            mod: "55",
+            serie,
+            nNF,
+            dhEmi,
+            tpNF: "1",
+            idDest: "1",
+            cMunFG: cMunEmit,
+            tpImp: "1",
+            tpEmis: "1",
+            cDV: chave.slice(-1),
+            tpAmb: "2", // homologação
+            finNFe: "1",
+            indFinal: "1",
+            indPres: "1",
+            procEmi: "0",
+            verProc: "APP_NFE_NODE",
+          },
+          emit: {
+            CNPJ: emitCNPJ,
+            xNome: data?.emitente?.razaoSocial,
+            enderEmit: {
+              xLgr: data?.emitente?.endereco?.logradouro,
+              nro: String(data?.emitente?.endereco?.numero ?? "S/N"),
+              xBairro: data?.emitente?.endereco?.bairro,
+              cMun: cMunEmit,
+              xMun: data?.emitente?.endereco?.municipio,
+              UF: data?.emitente?.endereco?.uf,
+              CEP: emitCEP,
+              cPais: "1058",
+              xPais: "BRASIL",
+            },
+            IE: emitIE,
+            CRT: String(data?.emitente?.crt || "1"),
+          },
+          dest: {
+            CNPJ: destCNPJ,
+            xNome: data?.destinatario?.razaoSocial,
+            enderDest: {
+              xLgr: data?.destinatario?.endereco?.logradouro,
+              nro: String(data?.destinatario?.endereco?.numero ?? "S/N"),
+              xBairro: data?.destinatario?.endereco?.bairro,
+              cMun: cMunDest,
+              xMun: data?.destinatario?.endereco?.municipio,
+              UF: data?.destinatario?.endereco?.uf,
+              CEP: destCEP,
+              cPais: "1058",
+              xPais: "BRASIL",
+            },
+            indIEDest: "9", // não contribuinte
+          },
+          det: (data?.produtos || []).map((prod, i) => {
+            const qCom = this.fixed(prod?.quantidade, 4);
+            const vUnCom = this.fixed(prod?.valorUnitario, 4);
+            const vProd = this.fixed(prod?.valorTotal ?? (Number(prod?.quantidade || 0) * Number(prod?.valorUnitario || 0)), 2);
+
+            return {
+              "@nItem": String(i + 1),
+              prod: {
+                cProd: String(prod?.codigo ?? (i + 1)),
+                cEAN: "SEM GTIN",
+                xProd: String(prod?.descricao ?? `Produto ${i + 1}`),
+                NCM: this.ncm8(prod?.ncm),
+                CFOP: this.cfop4(prod?.cfop),
+                uCom: String(prod?.unidade || "UN"),
+                qCom,
+                vUnCom,
+                vProd,
+                cEANTrib: "SEM GTIN",
+                uTrib: String(prod?.unidade || "UN"),
+                qTrib: qCom,
+                vUnTrib: vUnCom,
+                indTot: "1",
+              },
+              imposto: {
+                ICMS: { ICMSSN102: { orig: "0", CSOSN: "102" } },
+                PIS: { PISNT: { CST: "07" } },
+                COFINS: { COFINSNT: { CST: "07" } },
+              },
+            };
+          }),
+          total: {
+            ICMSTot: {
+              vBC: "0.00",
+              vICMS: "0.00",
+              vICMSDeson: "0.00",
+              vFCP: "0.00",
+              vBCST: "0.00",
+              vST: "0.00",
+              vFCPST: "0.00",
+              vFCPSTRet: "0.00",
+              vProd: this.fixed(vProdTotal, 2),
+              vFrete: "0.00",
+              vSeg: "0.00",
+              vDesc: "0.00",
+              vII: "0.00",
+              vIPI: "0.00",
+              vIPIDevol: "0.00",
+              vPIS: "0.00",
+              vCOFINS: "0.00",
+              vOutro: "0.00",
+              vNF: this.fixed(vNFTotal, 2),
+            },
+          },
+          transp: { modFrete: "9" },
+
+          // ✅ MUITO IMPORTANTE no schema 4.00 (comum causar 225 quando falta)
+          pag: {
+            detPag: {
+              indPag: "0",
+              tPag: "01", // dinheiro (padrão). Se quiser, depois mapeamos por forma de pagamento
+              vPag: this.fixed(vNFTotal, 2),
+            },
+          },
+        },
       },
-      httpsAgent: this.httpsAgent,
-      timeout: 30000
+    };
+
+    return create(nfe).end({ prettyPrint: false });
+  }
+
+  signXML(xml) {
+    // Remove prolog e trims
+    const xmlClean = String(xml || "").replace(/^\s*<\?xml[^>]*\?>\s*/i, "").trim();
+
+    // pega Id do infNFe
+    const m = xmlClean.match(/<infNFe[^>]*\sId="([^"]+)"/i);
+    if (!m) throw new Error("Não encontrei o atributo Id em <infNFe> para assinar.");
+    const infId = m[1]; // ex: NFe44digitos...
+
+    const sig = new SignedXml();
+    sig.signatureAlgorithm = "http://www.w3.org/2000/09/xmldsig#rsa-sha1";
+    sig.canonicalizationAlgorithm = "http://www.w3.org/TR/2001/REC-xml-c14n-20010315";
+
+    // Reference com URI = #Id (padrão SEFAZ)
+    sig.addReference(
+      "//*[local-name(.)='infNFe']",
+      [
+        "http://www.w3.org/2000/09/xmldsig#enveloped-signature",
+        "http://www.w3.org/TR/2001/REC-xml-c14n-20010315",
+      ],
+      "http://www.w3.org/2000/09/xmldsig#sha1",
+      `#${infId}`
+    );
+
+    sig.signingKey = this.privateKeyPem;
+
+    // ✅ KeyInfo com X509Certificate (muito importante em vários ambientes SEFAZ)
+    sig.keyInfoProvider = {
+      getKeyInfo: () =>
+        `<X509Data><X509Certificate>${this.leafCertBase64}</X509Certificate></X509Data>`,
+    };
+
+    // Assina e coloca Signature dentro do <NFe> (append)
+    sig.computeSignature(xmlClean, {
+      location: { reference: "//*[local-name(.)='NFe']", action: "append" },
     });
 
-    return res.data;
-  } catch (error) {
-    // 🔥 Mostra o corpo do erro (isso vai te dizer o motivo exato do 400)
-    if (error.response) {
-      const body = typeof error.response.data === 'string'
-        ? error.response.data
-        : JSON.stringify(error.response.data);
+    return sig.getSignedXml();
+  }
 
-      throw new Error(`Erro conexão SEFAZ: HTTP ${error.response.status} - ${body.slice(0, 2000)}`);
+  async transmit(xmlAssinado, tpAmb = 2, cUF = 35) {
+    const xmlClean = String(xmlAssinado || "")
+      .replace(/^\s*<\?xml[^>]*\?>\s*/i, "")
+      .trim();
+
+    const idLote = String(Date.now()).slice(-15).padStart(15, "0");
+
+    const enviNFe = `
+<enviNFe xmlns="http://www.portalfiscal.inf.br/nfe" versao="4.00">
+  <idLote>${idLote}</idLote>
+  <indSinc>1</indSinc>
+  ${xmlClean}
+</enviNFe>`.trim();
+
+    const envelope = `
+<soap12:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                 xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+                 xmlns:soap12="http://www.w3.org/2003/05/soap-envelope">
+  <soap12:Header>
+    <nfeCabecMsg xmlns="http://www.portalfiscal.inf.br/nfe/wsdl/NFeAutorizacao4">
+      <cUF>${cUF}</cUF>
+      <versaoDados>4.00</versaoDados>
+    </nfeCabecMsg>
+  </soap12:Header>
+  <soap12:Body>
+    <nfeDadosMsg xmlns="http://www.portalfiscal.inf.br/nfe/wsdl/NFeAutorizacao4">
+      ${enviNFe}
+    </nfeDadosMsg>
+  </soap12:Body>
+</soap12:Envelope>`.trim();
+
+    const url =
+      tpAmb === 1
+        ? "https://nfe.fazenda.sp.gov.br/ws/nfeautorizacao4.asmx"
+        : "https://homologacao.nfe.fazenda.sp.gov.br/ws/nfeautorizacao4.asmx";
+
+    const action =
+      "http://www.portalfiscal.inf.br/nfe/wsdl/NFeAutorizacao4/nfeAutorizacaoLote";
+
+    try {
+      const res = await axios.post(url, envelope, {
+        headers: {
+          "Content-Type": `application/soap+xml; charset=utf-8; action="${action}"`,
+          SOAPAction: `"${action}"`,
+        },
+        httpsAgent: this.httpsAgent,
+        timeout: 30000,
+      });
+
+      return res.data;
+    } catch (error) {
+      if (error.response) {
+        const body =
+          typeof error.response.data === "string"
+            ? error.response.data
+            : JSON.stringify(error.response.data);
+
+        throw new Error(
+          `Erro conexão SEFAZ: HTTP ${error.response.status} - ${body.slice(0, 2000)}`
+        );
+      }
+      throw new Error(`Erro conexão SEFAZ: ${error.message}`);
     }
-    throw new Error(`Erro conexão SEFAZ: ${error.message}`);
   }
 }
-}
+
 
 
 // --- Helper for status enum mapping ---
@@ -1512,55 +1628,60 @@ app.post('/api/nfe/transmitir', authenticateToken, async (req, res) => {
         // A estrutura do XML de resposta (SOAP) é complexa. O caminho abaixo é o padrão:
         //const nfeAutorizacaoResult = result['soap12:Envelope']['soap12:Body']['nfeAutorizacaoLoteResult']['retEnviNFe']; **** CORRIGINDO
 
-        const result = await parseXml(retornoSefaz, { explicitArray: false });
+const result = await parseXml(retornoSefaz, { explicitArray: false });
 
-// ✅ acha Envelope sem depender do prefixo soap12:
-const envelopeKey = Object.keys(result).find(k => k.toLowerCase().includes('envelope'));
-const envelope = envelopeKey ? result[envelopeKey] : null;
+// helper: pega nó mesmo com namespaces / estruturas diferentes
+const first = (v) => (Array.isArray(v) ? v[0] : v);
 
-if (!envelope) {
-  throw new Error("Resposta SEFAZ sem Envelope SOAP. Retorno: " + String(retornoSefaz).slice(0, 800));
-}
+const findNode = (obj, wantedKey) => {
+  if (!obj) return null;
+  if (Array.isArray(obj)) {
+    for (const item of obj) {
+      const found = findNode(item, wantedKey);
+      if (found) return found;
+    }
+    return null;
+  }
+  if (typeof obj !== "object") return null;
 
-// ✅ acha Body sem depender do prefixo soap12:
-const bodyKey = Object.keys(envelope).find(k => k.toLowerCase().includes('body'));
-const body = bodyKey ? envelope[bodyKey] : null;
+  if (Object.prototype.hasOwnProperty.call(obj, wantedKey)) {
+    return obj[wantedKey];
+  }
 
-if (!body) {
-  throw new Error("Resposta SEFAZ sem Body SOAP. Retorno: " + String(retornoSefaz).slice(0, 800));
-}
+  for (const k of Object.keys(obj)) {
+    const found = findNode(obj[k], wantedKey);
+    if (found) return found;
+  }
+  return null;
+};
 
-// ✅ tenta localizar o nó de retorno (varia conforme servidor)
-const resultKey =
-  Object.keys(body).find(k => k.toLowerCase().includes('nfeautorizacaoloteresult')) ||
-  Object.keys(body).find(k => k.toLowerCase().includes('nfeautorizacaoloteresponse')) ||
-  Object.keys(body)[0];
-
-const resultNode = resultKey ? body[resultKey] : null;
-
-if (!resultNode) {
-  throw new Error("Resposta SEFAZ: Body sem nó de resultado. Retorno: " + String(retornoSefaz).slice(0, 800));
-}
-
-// ✅ agora busca retEnviNFe em qualquer nível esperado
-const retEnviNFe =
-  resultNode?.retEnviNFe ||
-  resultNode?.nfeAutorizacaoLoteResult?.retEnviNFe ||
-  resultNode?.nfeAutorizacaoLoteResponse?.retEnviNFe;
+// ✅ SEFAZ SP costuma voltar como <nfeResultMsg>...</nfeResultMsg>
+// então a forma mais robusta é achar retEnviNFe em qualquer lugar:
+const retEnviNFeRaw = findNode(result, "retEnviNFe");
+const retEnviNFe = first(retEnviNFeRaw);
 
 if (!retEnviNFe) {
-  // Ajuda MUITO a depurar porque mostra as chaves disponíveis
-  const keys = Object.keys(resultNode || {});
-  throw new Error("Não encontrei retEnviNFe na resposta. Chaves encontradas: " + keys.join(', '));
+  throw new Error("Não encontrei retEnviNFe na resposta. Retorno: " + String(retornoSefaz).slice(0, 900));
 }
 
-const protNFe = retEnviNFe?.protNFe;
+const protNFe = first(retEnviNFe.protNFe);
+const infProt = first(protNFe?.infProt);
 
-const cStat = retEnviNFe?.cStat || (protNFe ? protNFe.infProt.cStat : null);
-const xMotivo = retEnviNFe?.xMotivo || (protNFe ? protNFe.infProt.xMotivo : "Erro desconhecido");
-const protocolo = protNFe ? protNFe.infProt.nProt : null;
+// ✅ regra correta:
+// - se existir infProt => cStat da NOTA é o que manda (100/225/etc)
+// - senão => usa cStat do LOTE (103/104/etc)
+const cStatLote = first(retEnviNFe.cStat);
+const xMotivoLote = first(retEnviNFe.xMotivo);
 
-      
+const cStatNota = first(infProt?.cStat);
+const xMotivoNota = first(infProt?.xMotivo);
+const protocolo = first(infProt?.nProt) || null;
+
+const cStat = String(cStatNota || cStatLote || "");
+const xMotivo = String(xMotivoNota || xMotivoLote || "Sem motivo informado");
+
+console.log("SEFAZ cStatLote:", cStatLote, "| cStatNota:", cStatNota, "| FINAL:", cStat, "| motivo:", xMotivo);
+  
         let newStatus = 'error';
         let responseJson = {};
 
