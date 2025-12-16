@@ -1483,9 +1483,6 @@ app.post('/api/nfe/transmitir', authenticateToken, async (req, res) => {
         // 4. Instancia o Serviço passando o BUFFER e a SENHA
         const senha = issuer.certificadoSenha || req.body.senhaCertificado;
 
-        if (!issuer.certificadoArquivo) {
-          return res.status(400).json({ sucesso: false, erro: 'Certificado digital não cadastrado para este emitente.' });
-        }
         if (!senha) {
           return res.status(400).json({ sucesso: false, erro: 'Senha do certificado não cadastrada. Informe no emitente ou na transmissão.' });
         }
