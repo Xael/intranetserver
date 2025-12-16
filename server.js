@@ -189,31 +189,75 @@ constructor(pfxBuffer, senhaCertificado) {
         return sig.getSignedXml();
     }
 
-    async transmit(xmlAssinado) {
-        const envelope = `
-            <soap12:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap12="http://www.w3.org/2003/05/soap-envelope">
-                <soap12:Header>
-                    <nfeCabecMsg xmlns="http://www.portalfiscal.inf.br/nfe/wsdl/NFeAutorizacao4"><cUF>35</cUF><versaoDados>4.00</versaoDados></nfeCabecMsg>
-                </soap12:Header>
-                <soap12:Body>
-                    <nfeDadosMsg xmlns="http://www.portalfiscal.inf.br/nfe/wsdl/NFeAutorizacao4">${xmlAssinado}</nfeDadosMsg>
-                </soap12:Body>
-            </soap12:Envelope>`;
+    async transmit(xmlAssinado, tpAmb = 2, cUF = 35) {
+  // Remove declaração XML se existir (não pode existir dentro do <nfeDadosMsg>)
+  const xmlClean = String(xmlAssinado || '')
+    .replace(/^\s*<\?xml[^>]*\?>\s*/i, '')
+    .trim();
 
-        // URL SP Homologação
-        const url = 'https://homologacao.nfe.fazenda.sp.gov.br/ws/nfeautorizacao4.asmx';
+  // Monta enviNFe (lote)
+  const idLote = String(Date.now()).slice(-15); // 15 dígitos
+  const enviNFe = `
+    <enviNFe xmlns="http://www.portalfiscal.inf.br/nfe" versao="4.00">
+      <idLote>${idLote}</idLote>
+      <indSinc>1</indSinc>
+      ${xmlClean}
+    </enviNFe>
+  `.trim();
 
-        try {
-            const res = await axios.post(url, envelope, {
-                headers: { 'Content-Type': 'application/soap+xml; charset=utf-8' },
-                httpsAgent: this.httpsAgent
-            });
-            return res.data;
-        } catch (error) {
-            throw new Error(`Erro conexão SEFAZ: ${error.message}`);
-        }
+  const envelope = `
+    <soap12:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                     xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+                     xmlns:soap12="http://www.w3.org/2003/05/soap-envelope">
+      <soap12:Header>
+        <nfeCabecMsg xmlns="http://www.portalfiscal.inf.br/nfe/wsdl/NFeAutorizacao4">
+          <cUF>${cUF}</cUF>
+          <versaoDados>4.00</versaoDados>
+        </nfeCabecMsg>
+      </soap12:Header>
+      <soap12:Body>
+        <nfeDadosMsg xmlns="http://www.portalfiscal.inf.br/nfe/wsdl/NFeAutorizacao4">
+          ${enviNFe}
+        </nfeDadosMsg>
+      </soap12:Body>
+    </soap12:Envelope>
+  `.trim();
+
+  // URLs SP (homologação/produção)
+  // Homologação: https://homologacao.nfe.fazenda.sp.gov.br/ws/nfeautorizacao4.asmx
+  // Produção:    https://nfe.fazenda.sp.gov.br/ws/nfeautorizacao4.asmx
+  // (SEFAZ-SP publica exatamente essas URLs) :contentReference[oaicite:1]{index=1}
+  const url = tpAmb === 1
+    ? 'https://nfe.fazenda.sp.gov.br/ws/nfeautorizacao4.asmx'
+    : 'https://homologacao.nfe.fazenda.sp.gov.br/ws/nfeautorizacao4.asmx';
+
+  // SOAPAction / action (ajuda em vários endpoints .asmx)
+  const action = 'http://www.portalfiscal.inf.br/nfe/wsdl/NFeAutorizacao4/nfeAutorizacaoLote';
+
+  try {
+    const res = await axios.post(url, envelope, {
+      headers: {
+        'Content-Type': `application/soap+xml; charset=utf-8; action="${action}"`,
+        'SOAPAction': `"${action}"`
+      },
+      httpsAgent: this.httpsAgent,
+      timeout: 30000
+    });
+
+    return res.data;
+  } catch (error) {
+    // 🔥 Mostra o corpo do erro (isso vai te dizer o motivo exato do 400)
+    if (error.response) {
+      const body = typeof error.response.data === 'string'
+        ? error.response.data
+        : JSON.stringify(error.response.data);
+
+      throw new Error(`Erro conexão SEFAZ: HTTP ${error.response.status} - ${body.slice(0, 2000)}`);
     }
+    throw new Error(`Erro conexão SEFAZ: ${error.message}`);
+  }
 }
+
 
 // --- Helper for status enum mapping ---
 const statusMap = {
@@ -1455,7 +1499,14 @@ app.post('/api/nfe/transmitir', authenticateToken, async (req, res) => {
         const xmlAssinado = service.signXML(xml);
         
         console.log("Transmitindo para SEFAZ...");
-        const retornoSefaz = await service.transmit(xmlAssinado); // Retorno é o XML bruto da SEFAZ
+        // tpAmb: 2 = homologação, 1 = produção
+        const tpAmb = 2;
+
+        // cUF: 35 = São Paulo (ideal: mapear pela UF do emitente)
+        const cUF = 35;
+
+        const retornoSefaz = await service.transmit(xmlAssinado, tpAmb, cUF);
+
 
         // 5. Processamento da Resposta da SEFAZ (cStat)
         const result = await parseXml(retornoSefaz, { explicitArray: false });
