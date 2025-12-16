@@ -307,74 +307,71 @@ class NFeService {
 
     return sig.getSignedXml();
   }
+  
+async transmit(xmlAssinado, tpAmb = 2, cUF = 35) {
+  // 1) não pode ter <?xml ...?> dentro do nfeDadosMsg
+  const xmlClean = String(xmlAssinado || "")
+    .replace(/^\s*<\?xml[^>]*\?>\s*/i, "")
+    .trim();
 
-  async transmit(xmlAssinado, tpAmb = 2, cUF = 35) {
-    const xmlClean = String(xmlAssinado || "")
-      .replace(/^\s*<\?xml[^>]*\?>\s*/i, "")
-      .trim();
+  // 2) lote 15 dígitos
+  const idLote = String(Date.now()).slice(-15).padStart(15, "0");
 
-    const idLote = String(Date.now()).slice(-15).padStart(15, "0");
+  // 3) IMPORTANTÍSSIMO: sem quebras/indentação aqui
+  const enviNFe =
+    `<enviNFe xmlns="http://www.portalfiscal.inf.br/nfe" versao="4.00">` +
+      `<idLote>${idLote}</idLote>` +
+      `<indSinc>1</indSinc>` +
+      `${xmlClean}` +
+    `</enviNFe>`;
 
-    const enviNFe = `
-<enviNFe xmlns="http://www.portalfiscal.inf.br/nfe" versao="4.00">
-  <idLote>${idLote}</idLote>
-  <indSinc>1</indSinc>
-  ${xmlClean}
-</enviNFe>`.trim();
+  // 4) IMPORTANTÍSSIMO: SOAP sem \n / \t / espaços entre tags
+  const action = "http://www.portalfiscal.inf.br/nfe/wsdl/NFeAutorizacao4/nfeAutorizacaoLote";
 
-    const envelope = `
-<soap12:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-                 xmlns:xsd="http://www.w3.org/2001/XMLSchema"
-                 xmlns:soap12="http://www.w3.org/2003/05/soap-envelope">
-  <soap12:Header>
-    <nfeCabecMsg xmlns="http://www.portalfiscal.inf.br/nfe/wsdl/NFeAutorizacao4">
-      <cUF>${cUF}</cUF>
-      <versaoDados>4.00</versaoDados>
-    </nfeCabecMsg>
-  </soap12:Header>
-  <soap12:Body>
-    <nfeDadosMsg xmlns="http://www.portalfiscal.inf.br/nfe/wsdl/NFeAutorizacao4">
-      ${enviNFe}
-    </nfeDadosMsg>
-  </soap12:Body>
-</soap12:Envelope>`.trim();
+  const envelope =
+    `<soap12:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap12="http://www.w3.org/2003/05/soap-envelope">` +
+      `<soap12:Header>` +
+        `<nfeCabecMsg xmlns="http://www.portalfiscal.inf.br/nfe/wsdl/NFeAutorizacao4">` +
+          `<cUF>${cUF}</cUF>` +
+          `<versaoDados>4.00</versaoDados>` +
+        `</nfeCabecMsg>` +
+      `</soap12:Header>` +
+      `<soap12:Body>` +
+        `<nfeDadosMsg xmlns="http://www.portalfiscal.inf.br/nfe/wsdl/NFeAutorizacao4">` +
+          `${enviNFe}` +
+        `</nfeDadosMsg>` +
+      `</soap12:Body>` +
+    `</soap12:Envelope>`;
 
-    const url =
-      tpAmb === 1
-        ? "https://nfe.fazenda.sp.gov.br/ws/nfeautorizacao4.asmx"
-        : "https://homologacao.nfe.fazenda.sp.gov.br/ws/nfeautorizacao4.asmx";
+  const url = tpAmb === 1
+    ? "https://nfe.fazenda.sp.gov.br/ws/nfeautorizacao4.asmx"
+    : "https://homologacao.nfe.fazenda.sp.gov.br/ws/nfeautorizacao4.asmx";
 
-    const action =
-      "http://www.portalfiscal.inf.br/nfe/wsdl/NFeAutorizacao4/nfeAutorizacaoLote";
+  try {
+    const res = await axios.post(url, envelope, {
+      headers: {
+        "Content-Type": `application/soap+xml; charset=utf-8; action="${action}"`,
+        "SOAPAction": `"${action}"`,
+      },
+      httpsAgent: this.httpsAgent,
+      timeout: 30000,
+      maxBodyLength: Infinity,
+      maxContentLength: Infinity,
+      // garante que o axios não “formate” nada
+      transformRequest: [(data) => data],
+    });
 
-    try {
-      const res = await axios.post(url, envelope, {
-        headers: {
-          "Content-Type": `application/soap+xml; charset=utf-8; action="${action}"`,
-          SOAPAction: `"${action}"`,
-        },
-        httpsAgent: this.httpsAgent,
-        timeout: 30000,
-      });
-
-      return res.data;
-    } catch (error) {
-      if (error.response) {
-        const body =
-          typeof error.response.data === "string"
-            ? error.response.data
-            : JSON.stringify(error.response.data);
-
-        throw new Error(
-          `Erro conexão SEFAZ: HTTP ${error.response.status} - ${body.slice(0, 2000)}`
-        );
-      }
-      throw new Error(`Erro conexão SEFAZ: ${error.message}`);
+    return res.data;
+  } catch (error) {
+    if (error.response) {
+      const body = typeof error.response.data === "string"
+        ? error.response.data
+        : JSON.stringify(error.response.data);
+      throw new Error(`Erro conexão SEFAZ: HTTP ${error.response.status} - ${body.slice(0, 2000)}`);
     }
+    throw new Error(`Erro conexão SEFAZ: ${error.message}`);
   }
 }
-
-
 
 // --- Helper for status enum mapping ---
 const statusMap = {
