@@ -1422,7 +1422,17 @@ app.post('/api/nfe/transmitir', authenticateToken, async (req, res) => {
             : Buffer.from(issuer.certificadoArquivo, 'base64');
 
         // 4. Instancia o Serviço passando o BUFFER e a SENHA
-        const service = new NFeService(pfxBuffer, issuer.certificadoSenha);
+        const senha = issuer.certificadoSenha || req.body.senhaCertificado;
+
+        if (!issuer.certificadoArquivo) {
+          return res.status(400).json({ sucesso: false, erro: 'Certificado digital não cadastrado para este emitente.' });
+        }
+        if (!senha) {
+          return res.status(400).json({ sucesso: false, erro: 'Senha do certificado não cadastrada. Informe no emitente ou na transmissão.' });
+        }
+
+        const service = new NFeService(pfxBuffer, senha);
+
         
         console.log("Gerando XML...");
         const xml = service.generateXML(nfeDoc.fullData);
