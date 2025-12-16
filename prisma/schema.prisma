@@ -271,8 +271,13 @@ model NfeEmitente {
   email             String?
   crt               String? // 1=Simples, 3=Normal
   endereco          Json // { logradouro, numero, bairro, municipio, uf, cep, codigoIbge }
+
+  certificadoArquivo String? @db.Text   // base64 do .pfx/.p12
+  certificadoSenha   String?            // ideal: criptografar depois
+
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
+
 
   @@map("nfe_emitentes")
 }
@@ -336,4 +341,5 @@ model SystemSettings {
 
   @@map("system_settings")
 }
+
 
