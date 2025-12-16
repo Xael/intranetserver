@@ -2,13 +2,11 @@ FROM node:20-bullseye-slim
 
 WORKDIR /app
 
-# Pacotes necessários + CA store
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl openssl \
   && rm -rf /var/lib/apt/lists/*
 
-# ✅ Instala a CA que assina o certificado da SEFAZ-SP (homologação)
-# (AC SOLUTI SSL EV G4) — extraída do seu openssl s_client
+# ✅ Intermediária que assina o site da SEFAZ (já no seu s_client)
 RUN cat > /usr/local/share/ca-certificates/ac-soluti-ssl-ev-g4.crt <<'EOF'
 -----BEGIN CERTIFICATE-----
 MIIHtDCCBZygAwIBAgIJANjGl6F55VD+MA0GCSqGSIb3DQEBDQUAMIGYMQswCQYD
@@ -56,10 +54,20 @@ wixwyINOM8U=
 -----END CERTIFICATE-----
 EOF
 
-RUN update-ca-certificates
+# ✅ Raiz ICP-Brasil v10 (bootstrap com -k porque ainda não confiamos nela)
+# O arquivo pode vir em PEM ou DER, então tratamos os dois.
+RUN set -eux; \
+  curl -kfsSL -L "https://acraiz.icpbrasil.gov.br/ICP-Brasilv10.crt" -o /tmp/icpbrv10.crt; \
+  if grep -q "BEGIN CERTIFICATE" /tmp/icpbrv10.crt; then \
+    cp /tmp/icpbrv10.crt /usr/local/share/ca-certificates/icpbr-root-v10.crt; \
+  else \
+    openssl x509 -inform DER -in /tmp/icpbrv10.crt -out /usr/local/share/ca-certificates/icpbr-root-v10.crt; \
+  fi; \
+  rm -f /tmp/icpbrv10.crt; \
+  update-ca-certificates
 
-# ✅ Faz o Node confiar também (Node usa CA própria, então isso é importante)
-ENV NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/ac-soluti-ssl-ev-g4.crt
+# ✅ Faz o Node usar também (boa prática)
+ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
 
 COPY package*.json ./
 RUN npm install --production
