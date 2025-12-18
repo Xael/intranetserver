@@ -1735,9 +1735,12 @@ const xMotivo = String(xMotivoNota || xMotivoLote || "Sem motivo informado");
 
 console.log("SEFAZ cStatLote:", cStatLote, "| cStatNota:", cStatNota, "| FINAL:", cStat, "| motivo:", xMotivo);
   
-        let newStatus = 'error';
-        let responseJson = {};
+// =============================
+// 6) TRATAMENTO DO cStat (CORRETO)
+// =============================
+let newStatus = 'error';
 
+// ✅ 100 = AUTORIZADA
 if (cStat === '100') {
   newStatus = 'authorized';
 
@@ -1759,12 +1762,12 @@ if (cStat === '100') {
       xmlAssinado: xmlAssinado,
       protocoloAutorizacao: protocolo,
 
-      // ✅ CHAVE/NUMERAÇÃO OFICIAL (para histórico + DANFE)
+      // ✅ CHAVE/NUMERAÇÃO OFICIAL
       chaveAcesso: chNFeAutorizada,
       serie: serieFromKey,
       numero: nNFfromKey,
 
-      // ✅ garante que o front/DANFE pegue sempre do fullData também
+      // ✅ garante que DANFE/histórico pegue do fullData também
       fullData: {
         ...(nfeDoc.fullData || {}),
         chaveAcesso: chNFeAutorizada,
@@ -1782,40 +1785,41 @@ if (cStat === '100') {
     xml: xmlAssinado,
     status: newStatus,
     protocolo,
-
-    // ✅ devolve pro front já certo (ambos nomes, pra compatibilidade)
-    chNFe: chNFeAutorizada,
-    chaveAcesso: chNFeAutorizada,
+    chNFe: chNFeAutorizada,        // compat
+    chaveAcesso: chNFeAutorizada,  // ✅ oficial
     serie: serieFromKey,
     numero: nNFfromKey,
   });
 }
 
-        } else if (cStat === '103') {
-            // Lote em processamento
-            newStatus = 'processing';
-            console.warn(`Lote em Processamento. Motivo: ${xMotivo}`);
-            await prisma.nfeDocumento.update({
-                where: { id },
-                data: { status: newStatus }
-            });
-            responseJson = { sucesso: true, status: newStatus, erro: xMotivo };
-            res.json(responseJson);
-            
-        } else {
-            // Rejeição
-            newStatus = 'rejected';
-            console.error(`Rejeição NFe: [${cStat}] ${xMotivo}`);
-            
-            // Salva o status de rejeição
-            await prisma.nfeDocumento.update({
-                where: { id },
-                data: { status: newStatus }
-            });
-            
-            responseJson = { sucesso: false, status: newStatus, erro: `Rejeição [${cStat || '??'}]: ${xMotivo}` };
-            res.status(400).json(responseJson); 
-        }
+// ✅ 103/104 = processamento / lote processado
+if (cStat === '103' || cStat === '104') {
+  newStatus = 'processing';
+  console.warn(`Lote em Processamento/Processado. Motivo: ${xMotivo}`);
+
+  await prisma.nfeDocumento.update({
+    where: { id },
+    data: { status: newStatus }
+  });
+
+  return res.json({ sucesso: true, status: newStatus, motivo: xMotivo });
+}
+
+// ❌ demais = rejeição
+newStatus = 'rejected';
+console.error(`Rejeição NFe: [${cStat}] ${xMotivo}`);
+
+await prisma.nfeDocumento.update({
+  where: { id },
+  data: { status: newStatus }
+});
+
+return res.status(400).json({
+  sucesso: false,
+  status: newStatus,
+  erro: `Rejeição [${cStat || '??'}]: ${xMotivo}`
+});
+
 
     } catch (error) {
         console.error("Erro Crítico na Transmissão:", error);
