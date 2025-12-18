@@ -1745,9 +1745,9 @@ if (cStat === '100') {
     throw new Error("Autorizou (100), mas não veio chNFe válida em infProt.");
   }
 
-  // extrai numero/serie da chave autorizada (pra alinhar sua tela)
-  const serieFromKey = Number(chNFeAutorizada.slice(22, 25));
-  const nNFfromKey  = Number(chNFeAutorizada.slice(25, 34));
+  // extrai serie/numero da chave autorizada
+  const serieFromKey = String(Number(chNFeAutorizada.slice(22, 25))); // "001" -> "1"
+  const nNFfromKey   = String(Number(chNFeAutorizada.slice(25, 34))); // "000000189" -> "189"
 
   console.log(`NFe Autorizada! Protocolo: ${protocolo} | chNFe: ${chNFeAutorizada}`);
 
@@ -1757,9 +1757,13 @@ if (cStat === '100') {
       status: newStatus,
       xmlAssinado: xmlAssinado,
       protocoloAutorizacao: protocolo,
-      chaveAcesso: chNFeAutorizada, // ✅ CHAVE OFICIAL
-      serie: serieFromKey,          // ✅ ALINHA
-      numero: nNFfromKey,           // ✅ ALINHA
+
+      // ✅ CHAVE/NUMERAÇÃO OFICIAL (para histórico + DANFE)
+      chaveAcesso: chNFeAutorizada,
+      serie: serieFromKey,
+      numero: nNFfromKey,
+
+      // ✅ garante que o front/DANFE pegue sempre do fullData também
       fullData: {
         ...(nfeDoc.fullData || {}),
         chaveAcesso: chNFeAutorizada,
@@ -1777,7 +1781,12 @@ if (cStat === '100') {
     xml: xmlAssinado,
     status: newStatus,
     protocolo,
-    chaveAcesso: chNFeAutorizada, // ✅ devolve pro front já certo
+
+    // ✅ devolve pro front já certo (ambos nomes, pra compatibilidade)
+    chNFe: chNFeAutorizada,
+    chaveAcesso: chNFeAutorizada,
+    serie: serieFromKey,
+    numero: nNFfromKey,
   });
 }
 
