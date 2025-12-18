@@ -179,6 +179,14 @@ class NFeService {
     const destCNPJ = this.onlyDigits(data?.destinatario?.cnpj);
     if (!/^\d{14}$/.test(destCNPJ)) throw new Error("CNPJ do destinatário inválido.");
 
+    const destIEraw = String(data?.destinatario?.inscricaoEstadual ?? "").trim();
+    const destIEdigits = this.onlyDigits(destIEraw);
+    const destIsento = /^isento$/i.test(destIEraw);
+    let indIEDest = "9";
+    let destIEtag;
+    if (destIsento) { indIEDest = "2"; destIEtag = "ISENTO"; }
+    else if (destIEdigits) { indIEDest = "1"; destIEtag = destIEdigits; }
+
     const dhEmi = this.makeDhEmiFromKey(data?.dataEmissao, k.AAMM);
 
     const vProdTotal = Number(data?.totais?.vProd || 0);
@@ -242,7 +250,8 @@ class NFeService {
               cPais: "1058",
               xPais: "BRASIL",
             },
-            indIEDest: "9",
+            indIEDest,
+            ...(destIEtag ? { IE: destIEtag } : {}),
           },
           det: (data?.produtos || []).map((prod, i) => {
             const quantidade = Number(String(prod?.quantidade ?? "0").replace(",", "."));
