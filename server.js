@@ -1497,6 +1497,17 @@ app.get('/api/nfe/notas', authenticateToken, async (req, res) => {
 // POST: Salvar Nota (Com Auto-Cadastro e ATUALIZAÇÃO INTELIGENTE via Chave)
 app.post('/api/nfe/notas', authenticateToken, async (req, res) => {
   const invoiceData = req.body;
+  // normaliza chave (somente dígitos)
+if (invoiceData.chaveAcesso) {
+  invoiceData.chaveAcesso = String(invoiceData.chaveAcesso).replace(/\D/g, '');
+}
+
+// se a chave tem 44 dígitos, força numero/serie a bater com ela
+if (/^\d{44}$/.test(invoiceData.chaveAcesso)) {
+  invoiceData.serie = Number(invoiceData.chaveAcesso.slice(22, 25));
+  invoiceData.numero = Number(invoiceData.chaveAcesso.slice(25, 34));
+}
+
   try {
     // --- 1. LÓGICA DE AUTO-CADASTRO DE DESTINATÁRIO ---
     if (invoiceData.destinatario && invoiceData.destinatario.cnpj) {
@@ -1544,16 +1555,16 @@ app.post('/api/nfe/notas', authenticateToken, async (req, res) => {
     }
 
     // --- 3. PREPARAÇÃO E SALVAMENTO DA NOTA ---
-    const dataToSave = {
-        numero: invoiceData.numero,
-        serie: invoiceData.serie,
-        chaveAcesso: invoiceData.chaveAcesso,
-        status: invoiceData.status || 'draft',
-        xmlAssinado: invoiceData.xmlAssinado,
-        dataEmissao: new Date(invoiceData.dataEmissao),
-        emitenteCnpj: invoiceData.emitente?.cnpj,
-        fullData: invoiceData 
-    };
+  const dataToSave = {
+  numero: invoiceData.numero,
+  serie: invoiceData.serie,
+  chaveAcesso: invoiceData.chaveAcesso,
+  status: invoiceData.status || 'draft',
+  xmlAssinado: invoiceData.xmlAssinado,
+  dataEmissao: new Date(invoiceData.dataEmissao),
+  emitenteCnpj: invoiceData.emitente?.cnpj,
+  fullData: invoiceData
+};
 
     let existingRecord = null;
 
@@ -1726,21 +1737,49 @@ console.log("SEFAZ cStatLote:", cStatLote, "| cStatNota:", cStatNota, "| FINAL:"
         let newStatus = 'error';
         let responseJson = {};
 
-        if (cStat === '100') {
-            newStatus = 'authorized';
-            console.log(`NFe Autorizada! Protocolo: ${protocolo}`);
-            
-            // Salva o protocolo e status de sucesso
-            await prisma.nfeDocumento.update({
-                where: { id },
-                data: { 
-                    status: newStatus, 
-                    xmlAssinado: xmlAssinado,
-                    protocoloAutorizacao: protocolo 
-                }
-            });
-            responseJson = { sucesso: true, xml: xmlAssinado, status: newStatus, protocolo: protocolo };
-            res.json(responseJson);
+if (cStat === '100') {
+  newStatus = 'authorized';
+
+  const chNFeAutorizada = String(infProt?.chNFe || '').replace(/\D/g, '');
+  if (!/^\d{44}$/.test(chNFeAutorizada)) {
+    throw new Error("Autorizou (100), mas não veio chNFe válida em infProt.");
+  }
+
+  // extrai numero/serie da chave autorizada (pra alinhar sua tela)
+  const serieFromKey = Number(chNFeAutorizada.slice(22, 25));
+  const nNFfromKey  = Number(chNFeAutorizada.slice(25, 34));
+
+  console.log(`NFe Autorizada! Protocolo: ${protocolo} | chNFe: ${chNFeAutorizada}`);
+
+  await prisma.nfeDocumento.update({
+    where: { id },
+    data: {
+      status: newStatus,
+      xmlAssinado: xmlAssinado,
+      protocoloAutorizacao: protocolo,
+      chaveAcesso: chNFeAutorizada, // ✅ CHAVE OFICIAL
+      serie: serieFromKey,          // ✅ ALINHA
+      numero: nNFfromKey,           // ✅ ALINHA
+      fullData: {
+        ...(nfeDoc.fullData || {}),
+        chaveAcesso: chNFeAutorizada,
+        serie: serieFromKey,
+        numero: nNFfromKey,
+        protocoloAutorizacao: protocolo,
+        status: newStatus,
+        xmlAssinado: xmlAssinado,
+      },
+    }
+  });
+
+  return res.json({
+    sucesso: true,
+    xml: xmlAssinado,
+    status: newStatus,
+    protocolo,
+    chaveAcesso: chNFeAutorizada, // ✅ devolve pro front já certo
+  });
+}
 
         } else if (cStat === '103') {
             // Lote em processamento
