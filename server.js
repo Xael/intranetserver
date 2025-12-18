@@ -152,7 +152,7 @@ class NFeService {
   }
 
   // ---------------- XML ----------------
-  generateXML(data) {
+  generateXML(data, tpAmb = 1) {
     const k = this.parseChaveAcesso(data?.chaveAcesso);
 
     const emitCNPJ = this.onlyDigits(data?.emitente?.cnpj);
@@ -204,7 +204,7 @@ class NFeService {
             tpImp: "1",
             tpEmis: k.tpEmis,          // ✅ bate com a chave
             cDV: k.cDV,                // ✅ DV da chave
-            tpAmb: "2",
+            tpAmb: String(tpAmb),
             finNFe: "1",
             indFinal: "1",
             indPres: "1",
@@ -349,7 +349,7 @@ class NFeService {
     return sig.getSignedXml();
   }
 
-  async transmit(xmlAssinado, tpAmb = 2, cUF = 35) {
+  async transmit(xmlAssinado, tpAmb = 1, cUF = 35) {
     const xmlClean = String(xmlAssinado || "").replace(/^\s*<\?xml[^>]*\?>\s*/i, "").trim();
     const idLote = String(Date.now()).slice(-15).padStart(15, "0");
 
@@ -1638,18 +1638,19 @@ app.post('/api/nfe/transmitir', authenticateToken, async (req, res) => {
 
         
         console.log("Gerando XML...");
-        const xml = service.generateXML(nfeDoc.fullData);
+        // tpAmb: 1 = PRODUÇÃO (NF-e válida), 2 = Homologação (teste)
+        const tpAmb = Number(process.env.NFE_TPAMB || 1);
+        const xml = service.generateXML(nfeDoc.fullData, tpAmb);
         
         console.log("Assinando XML...");
         const xmlAssinado = service.signXML(xml);
         
         console.log("Transmitindo para SEFAZ...");
-        // tpAmb: 2 = homologação, 1 = produção
-        const tpAmb = 2;
-
+        console.log("Ambiente SEFAZ (tpAmb):", tpAmb === 1 ? "PRODUÇÃO" : "HOMOLOGAÇÃO");
+        
         // cUF: 35 = São Paulo (ideal: mapear pela UF do emitente)
         const cUF = 35;
-
+        
         const retornoSefaz = await service.transmit(xmlAssinado, tpAmb, cUF);
         console.log("RETORNO SEFAZ (inicio):", String(retornoSefaz).slice(0, 1200));
 
