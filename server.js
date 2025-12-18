@@ -1711,6 +1711,7 @@ const findNode = (obj, wantedKey) => {
 // então a forma mais robusta é achar retEnviNFe em qualquer lugar:
 const retEnviNFeRaw = findNode(result, "retEnviNFe");
 const retEnviNFe = first(retEnviNFeRaw);
+const chNFeAutorizada = String(first(infProt?.chNFe) || '').replace(/\D/g, '');
 
 if (!retEnviNFe) {
   throw new Error("Não encontrei retEnviNFe na resposta. Retorno: " + String(retornoSefaz).slice(0, 900));
