@@ -1,9 +1,6 @@
 const { parseStringPromise } = require('xml2js');
 const parseXml = (xml, opts) => parseStringPromise(xml, opts);
 
-// A LINHA ABAIXO FOI REMOVIDA PARA CORRIGIR O ERRO MODULE_NOT_FOUND
-// const NFeService = require('./services/NFeService'); 
-
 const path = require('path');
 const express = require('express');
 const cors = require('cors');
@@ -21,6 +18,13 @@ const { create } = require('xmlbuilder2');
 const prisma = new PrismaClient();
 const app = express();
 const PORT = process.env.PORT || 3001;
+
+// ==================================================================
+// 🚨 CORREÇÃO CRÍTICA: MIDDLEWARES DEVEM VIR ANTES DAS ROTAS 🚨
+// ==================================================================
+app.use(cors()); // Libera o CORS para todas as origens
+app.use(express.json({ limit: '50mb' })); // Aumentei o limite para XMLs grandes
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // É altamente recomendável mover esta chave para uma variável de ambiente (.env)
 const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-key-that-is-long-and-secure';
@@ -454,24 +458,23 @@ app.post('/api/nfe/importar', async (req, res) => {
     const dest = nfeInfo.dest;
     
     // Criar registro no Banco (Adaptado para o seu Prisma Schema)
-const novaNfe = await prisma.nfeDocumento.create({
-  data: {
-    status: 'editing',
-    // Força a conversão para String antes de enviar ao Prisma
-    numero: String(nfeInfo.ide.nNF), 
-    serie: String(nfeInfo.ide.serie),
-    xmlAssinado: xmlContent,
-        fullData: nfeInfo, // Salva o JSON completo para facilitar
-        // Mapeie os campos essenciais para busca
+    const novaNfe = await prisma.nfeDocumento.create({
+      data: {
+        status: 'editing', 
+        // 🚨 CORREÇÃO: Forçar STRING para evitar erro do Prisma (Int vs String)
+        numero: String(nfeInfo.ide.nNF),
+        serie: String(nfeInfo.ide.serie),
+        xmlAssinado: xmlContent, 
+        fullData: nfeInfo, 
+        chaveAcesso: nfeInfo['@Id']?.replace('NFe', '') || null,
+        emitenteCnpj: emitente.CNPJ,
         emitente: {
            cnpj: emitente.CNPJ,
            razaoSocial: emitente.xNome,
-           // ... outros campos
         },
         destinatario: {
            cnpj: dest.CNPJ || dest.CPF,
            razaoSocial: dest.xNome,
-           // ... outros campos
         }
       }
     });
@@ -603,10 +606,6 @@ const statusMap = {
 const mapStatusToEnum = (statusString) => {
   return statusMap[statusString] || statusString;
 };
-
-// Middleware
-app.use(cors());
-app.use(express.json({ limit: '10mb' }));
 
 // --- MIDDLEWARE DE AUTENTICAÇÃO ---
 const authenticateToken = (req, res, next) => {
@@ -1680,7 +1679,7 @@ if (invoiceData.chaveAcesso) {
 
 // se a chave tem 44 dígitos, força numero/serie a bater com ela
 if (/^\d{44}$/.test(invoiceData.chaveAcesso)) {
-  // Converte para Number para tirar os zeros a esquerda, mas volta para String pro Banco
+  // 🚨 CORREÇÃO: Converte para Number e depois String para tirar zeros à esquerda
   invoiceData.serie = String(Number(invoiceData.chaveAcesso.slice(22, 25)));
   invoiceData.numero = String(Number(invoiceData.chaveAcesso.slice(25, 34)));
 }
@@ -1733,8 +1732,9 @@ if (/^\d{44}$/.test(invoiceData.chaveAcesso)) {
 
     // --- 3. PREPARAÇÃO E SALVAMENTO DA NOTA ---
   const dataToSave = {
-  numero: invoiceData.numero,
-  serie: invoiceData.serie,
+  // 🚨 CORREÇÃO: Força String para o Prisma
+  numero: String(invoiceData.numero),
+  serie: String(invoiceData.serie),
   chaveAcesso: invoiceData.chaveAcesso,
   status: invoiceData.status || 'draft',
   xmlAssinado: invoiceData.xmlAssinado,
