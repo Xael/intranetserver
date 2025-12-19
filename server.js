@@ -25,7 +25,7 @@ const PORT = process.env.PORT || 3001;
 // É altamente recomendável mover esta chave para uma variável de ambiente (.env)
 const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-key-that-is-long-and-secure';
 
-// --- CLASSE NFeService (EMBUTIDA) ---
+// --- CLASSE NFeService (EMBUTIDA E CORRIGIDA) ---
 class NFeService {
   constructor(pfxBuffer, senhaCertificado) {
     if (!pfxBuffer || !senhaCertificado) {
@@ -323,11 +323,17 @@ class NFeService {
     return create(nfe).end({ prettyPrint: false });
   }
 
+  // ✅ CORRIGIDO: Assina tanto Nota (infNFe) quanto Evento (infEvento)
   signXML(xml) {
     const xmlClean = String(xml || "").replace(/^\s*<\?xml[^>]*\?>\s*/i, "").trim();
 
-    const m = xmlClean.match(/<infNFe[^>]*\sId="([^"]+)"/i);
-    if (!m) throw new Error("Não encontrei o atributo Id em <infNFe> para assinar.");
+    // Detecta se é NFe ou Evento
+    let tagToSign = 'infNFe';
+    if (xmlClean.includes('<infEvento')) tagToSign = 'infEvento';
+
+    const regex = new RegExp(`<${tagToSign}[^>]*\\sId="([^"]+)"`, 'i');
+    const m = xmlClean.match(regex);
+    if (!m) throw new Error(`Não encontrei o atributo Id em <${tagToSign}> para assinar.`);
     const infId = m[1];
 
     const sig = new SignedXml();
@@ -335,7 +341,7 @@ class NFeService {
     sig.canonicalizationAlgorithm = "http://www.w3.org/TR/2001/REC-xml-c14n-20010315";
 
     sig.addReference(
-      "//*[local-name(.)='infNFe']",
+      `//*[local-name(.)='${tagToSign}']`,
       [
         "http://www.w3.org/2000/09/xmldsig#enveloped-signature",
         "http://www.w3.org/TR/2001/REC-xml-c14n-20010315",
@@ -345,19 +351,21 @@ class NFeService {
     );
 
     sig.signingKey = this.privateKeyPem;
-
     sig.keyInfoProvider = {
-      getKeyInfo: () =>
-        `<X509Data><X509Certificate>${this.leafCertBase64}</X509Certificate></X509Data>`,
+      getKeyInfo: () => `<X509Data><X509Certificate>${this.leafCertBase64}</X509Certificate></X509Data>`,
     };
 
+    // Onde anexar a assinatura: em NFe é filho de NFe; em evento é filho de evento
+    const parentTag = tagToSign === 'infNFe' ? 'NFe' : 'evento';
+
     sig.computeSignature(xmlClean, {
-      location: { reference: "//*[local-name(.)='NFe']", action: "append" },
+      location: { reference: `//*[local-name(.)='${parentTag}']`, action: "append" },
     });
 
     return sig.getSignedXml();
   }
 
+  // ENVIO DE NFE (Autorizacao)
   async transmit(xmlAssinado, tpAmb = 1, cUF = 35) {
     const xmlClean = String(xmlAssinado || "").replace(/^\s*<\?xml[^>]*\?>\s*/i, "").trim();
     const idLote = String(Date.now()).slice(-15).padStart(15, "0");
@@ -370,25 +378,34 @@ class NFeService {
       `</enviNFe>`;
 
     const action = "http://www.portalfiscal.inf.br/nfe/wsdl/NFeAutorizacao4/nfeAutorizacaoLote";
+    return this._sendSoap(enviNFe, action, tpAmb, cUF, 'NFeAutorizacao4');
+  }
 
+  // ✅ NOVO: Enviar Evento (Cancelamento/CCe)
+  async transmitEvent(xmlEventoAssinado, tpAmb = 1, cUF = 35) {
+    const xmlClean = String(xmlEventoAssinado || "").replace(/^\s*<\?xml[^>]*\?>\s*/i, "").trim();
+    // Para evento, o corpo já vem pronto (envEvento)
+    
+    const action = "http://www.portalfiscal.inf.br/nfe/wsdl/NFeRecepcaoEvento4/nfeRecepcaoEvento";
+    return this._sendSoap(xmlClean, action, tpAmb, cUF, 'NFeRecepcaoEvento4');
+  }
+
+  // Helper SOAP genérico
+  async _sendSoap(contentXml, action, tpAmb, cUF, serviceName) {
     const envelope =
       `<soap12:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap12="http://www.w3.org/2003/05/soap-envelope">` +
-        `<soap12:Header>` +
-          `<nfeCabecMsg xmlns="http://www.portalfiscal.inf.br/nfe/wsdl/NFeAutorizacao4">` +
-            `<cUF>${cUF}</cUF>` +
-            `<versaoDados>4.00</versaoDados>` +
-          `</nfeCabecMsg>` +
-        `</soap12:Header>` +
-        `<soap12:Body>` +
-          `<nfeDadosMsg xmlns="http://www.portalfiscal.inf.br/nfe/wsdl/NFeAutorizacao4">` +
-            `${enviNFe}` +
-          `</nfeDadosMsg>` +
-        `</soap12:Body>` +
+        `<soap12:Header><nfeCabecMsg xmlns="http://www.portalfiscal.inf.br/nfe/wsdl/${serviceName}"><cUF>${cUF}</cUF><versaoDados>1.00</versaoDados></nfeCabecMsg></soap12:Header>` +
+        `<soap12:Body><nfeDadosMsg xmlns="http://www.portalfiscal.inf.br/nfe/wsdl/${serviceName}">${contentXml}</nfeDadosMsg></soap12:Body>` +
       `</soap12:Envelope>`;
 
-    const url = tpAmb === 1
-      ? "https://nfe.fazenda.sp.gov.br/ws/nfeautorizacao4.asmx"
-      : "https://homologacao.nfe.fazenda.sp.gov.br/ws/nfeautorizacao4.asmx";
+    // URLs SP (Autorização e RecepçãoEvento usam endpoints diferentes)
+    let baseUrl = tpAmb === 1 ? "https://nfe.fazenda.sp.gov.br/ws" : "https://homologacao.nfe.fazenda.sp.gov.br/ws";
+    
+    let endpoint = "";
+    if (serviceName === 'NFeAutorizacao4') endpoint = "nfeautorizacao4.asmx";
+    if (serviceName === 'NFeRecepcaoEvento4') endpoint = "nferecepcaoevento4.asmx";
+
+    const url = `${baseUrl}/${endpoint}`;
 
     try {
       const res = await axios.post(url, envelope, {
@@ -405,10 +422,8 @@ class NFeService {
       return res.data;
     } catch (error) {
       if (error.response) {
-        const body = typeof error.response.data === "string"
-          ? error.response.data
-          : JSON.stringify(error.response.data);
-        throw new Error(`Erro conexão SEFAZ: HTTP ${error.response.status} - ${body.slice(0, 2000)}`);
+        const body = typeof error.response.data === "string" ? error.response.data : JSON.stringify(error.response.data);
+        throw new Error(`Erro conexão SEFAZ: HTTP ${error.response.status} - ${body.slice(0, 200)}`);
       }
       throw new Error(`Erro conexão SEFAZ: ${error.message}`);
     }
@@ -468,7 +483,7 @@ app.post('/api/nfe/importar', async (req, res) => {
   }
 });
 
-// Rota de Cancelamento Real
+// ✅ Rota de Cancelamento Real (CORRIGIDA)
 app.post('/api/nfe/cancelar', async (req, res) => {
   const { id, justificativa } = req.body;
 
@@ -481,20 +496,38 @@ app.post('/api/nfe/cancelar', async (req, res) => {
     }
 
     const chave = nfe.fullData.chaveAcesso;
-    const cnpjEmitente = nfe.emitente?.cnpj?.replace(/\D/g, '');
-    const dataHora = new Date().toISOString().split('.')[0] + '-03:00'; // Ajuste fuso se necessário
+    // Tenta pegar protocolo salvo ou do fullData
+    const protocolo = nfe.protocoloAutorizacao || (nfe.fullData.protNFe?.infProt?.nProt);
     
-    // 2. Montar XML do Evento de Cancelamento (TP 110111)
-    // Usando xmlbuilder2 que você já tem instalado
+    if (!protocolo) {
+        return res.status(400).json({ erro: 'Nota não possui protocolo de autorização, impossível cancelar.' });
+    }
+
+    // Busca CNPJ emitente para certificado
+    const cnpjEmitente = (nfe.emitenteCnpj || nfe.fullData.emit?.CNPJ || '').replace(/\D/g, '');
+    
+    // Buscar certificado
+    const issuer = await prisma.nfeEmitente.findUnique({ where: { cnpj: cnpjEmitente } });
+    if (!issuer || !issuer.certificadoArquivo || !issuer.certificadoSenha) {
+        return res.status(400).json({ erro: 'Certificado do emitente não encontrado.' });
+    }
+
+    // Instancia Service
+    const pfxBuffer = Buffer.isBuffer(issuer.certificadoArquivo) ? issuer.certificadoArquivo : Buffer.from(issuer.certificadoArquivo, 'base64');
+    const service = new NFeService(pfxBuffer, issuer.certificadoSenha);
+
+    const tpAmb = Number(process.env.NFE_TPAMB || 1); // 1=Prod
+    const dataHora = new Date().toISOString().split('.')[0] + '-03:00'; 
     const idEvento = `ID110111${chave}01`;
     
-    const xmlEvento = create({ version: '1.0', encoding: 'UTF-8' })
+    // 2. Montar XML do Evento de Cancelamento
+    const xmlEventoBody = create({ version: '1.0', encoding: 'UTF-8' })
       .ele('envEvento', { xmlns: 'http://www.portalfiscal.inf.br/nfe', versao: '1.00' })
         .ele('idLote').txt('1').up()
         .ele('evento', { xmlns: 'http://www.portalfiscal.inf.br/nfe', versao: '1.00' })
           .ele('infEvento', { Id: idEvento })
-            .ele('cOrgao').txt(chave.substring(0, 2)).up() // UF da chave
-            .ele('tpAmb').txt('2').up() // 2=Homologação, 1=Produção (Pegar do config)
+            .ele('cOrgao').txt(chave.substring(0, 2)).up()
+            .ele('tpAmb').txt(String(tpAmb)).up()
             .ele('CNPJ').txt(cnpjEmitente).up()
             .ele('chNFe').txt(chave).up()
             .ele('dhEvento').txt(dataHora).up()
@@ -503,7 +536,7 @@ app.post('/api/nfe/cancelar', async (req, res) => {
             .ele('verEvento').txt('1.00').up()
             .ele('detEvento', { versao: '1.00' })
               .ele('descEvento').txt('Cancelamento').up()
-              .ele('nProt').txt(nfe.fullData.protocoloAutorizacao).up()
+              .ele('nProt').txt(protocolo).up()
               .ele('xJust').txt(justificativa).up()
             .up()
           .up()
@@ -511,28 +544,44 @@ app.post('/api/nfe/cancelar', async (req, res) => {
       .up()
       .end({ prettyPrint: false });
 
-    // 3. Assinar o XML (Lógica similar à de autorização que você já tem)
-    // ... [Inserir aqui a lógica de assinatura usando SignedXml e seu certificado] ...
-    // Para simplificar, assumindo que você instancie a classe NFeService aqui:
-    // const nfeService = new NFeService(certificadoBuffer, senha);
-    // const xmlAssinado = nfeService.assinarEvento(xmlEvento); 
+    // 3. Assinar o XML
+    const xmlAssinado = service.signXML(xmlEventoBody);
     
-    // NOTA: Você precisará criar esse método 'assinarEvento' na sua classe NFeService ou adaptar a lógica de assinatura existente.
+    // 4. Enviar para SEFAZ
+    console.log("Enviando cancelamento para SEFAZ...");
+    const retornoSefaz = await service.transmitEvent(xmlAssinado, tpAmb, Number(chave.substring(0, 2)));
 
-    // 4. Enviar para SEFAZ (RecepcaoEvento)
-    // const retornoSefaz = await axios.post(urlSefazEvento, xmlBody, { headers... });
+    // 5. Processar retorno
+    const result = await parseXml(retornoSefaz, { explicitArray: false });
 
-    // 5. Se sucesso (cStat 135 = Cancelamento Homologado)
-    const sucesso = true; // Simulação até você conectar o axios acima
+    // Helper para achar nó recursivo
+    const findNode = (obj, wantedKey) => {
+        if (!obj) return null;
+        if (obj[wantedKey]) return obj[wantedKey];
+        for (const k in obj) {
+            if (typeof obj[k] === 'object') {
+                const f = findNode(obj[k], wantedKey);
+                if (f) return f;
+            }
+        }
+        return null;
+    };
+
+    const retEnv = findNode(result, 'retEnvEvento');
+    const infEvento = retEnv?.retEvento?.infEvento;
     
-    if (sucesso) {
+    const cStat = infEvento?.cStat;
+    const xMotivo = infEvento?.xMotivo;
+
+    // 135 = Evento registrado e vinculado a NF-e
+    if (cStat === '135') {
         await prisma.nfeDocumento.update({
             where: { id },
             data: { status: 'cancelled' }
         });
         return res.json({ sucesso: true, mensagem: 'Nota Cancelada com Sucesso' });
     } else {
-        return res.status(400).json({ erro: 'SEFAZ Rejeitou o cancelamento' });
+        return res.status(400).json({ erro: `SEFAZ Rejeitou: [${cStat}] ${xMotivo}` });
     }
 
   } catch (e) {
@@ -1735,15 +1784,14 @@ app.delete('/api/nfe/notas/:id', authenticateToken, async (req, res) => {
   }
 });
 
-// --- ROTA DE TRANSMISSÃO CORRIGIDA (SEM INCLUDE ERRADO) ---
+// ✅ ROTA DE TRANSMISSÃO CORRIGIDA (SEM ERROS DE VARIÁVEL)
 app.post('/api/nfe/transmitir', authenticateToken, async (req, res) => {
     try {
         const { id } = req.body;
         
-        // LOG PARA DEBUG
         console.log(`Iniciando transmissão NFe para ID: ${id}`);
 
-        // 1. Busca APENAS a Nota (sem include quebrado)
+        // 1. Busca APENAS a Nota
         const nfeDoc = await prisma.nfeDocumento.findUnique({ 
             where: { id }
         });
@@ -1754,7 +1802,7 @@ app.post('/api/nfe/transmitir', authenticateToken, async (req, res) => {
         let cnpjRaw = nfeDoc.emitenteCnpj || (nfeDoc.fullData && nfeDoc.fullData.emitente ? nfeDoc.fullData.emitente.cnpj : null);
         if (!cnpjRaw) return res.status(400).json({ error: 'CNPJ do emitente não encontrado na nota.' });
         
-        const cnpjClean = cnpjRaw.replace(/\D/g, ''); // <--- IMPORTANTE
+        const cnpjClean = cnpjRaw.replace(/\D/g, ''); 
 
         console.log(`Buscando certificado para CNPJ: ${cnpjClean}`);
 
@@ -1773,16 +1821,9 @@ app.post('/api/nfe/transmitir', authenticateToken, async (req, res) => {
             ? issuer.certificadoArquivo 
             : Buffer.from(issuer.certificadoArquivo, 'base64');
 
-        // 4. Instancia o Serviço passando o BUFFER e a SENHA
-        const senha = issuer.certificadoSenha || req.body.senhaCertificado;
+        // 4. Instancia o Serviço
+        const service = new NFeService(pfxBuffer, issuer.certificadoSenha);
 
-        if (!senha) {
-          return res.status(400).json({ sucesso: false, erro: 'Senha do certificado não cadastrada. Informe no emitente ou na transmissão.' });
-        }
-
-        const service = new NFeService(pfxBuffer, senha);
-
-        
         console.log("Gerando XML...");
         // tpAmb: 1 = PRODUÇÃO (NF-e válida), 2 = Homologação (teste)
         const tpAmb = Number(process.env.NFE_TPAMB || 1);
@@ -1792,159 +1833,148 @@ app.post('/api/nfe/transmitir', authenticateToken, async (req, res) => {
         const xmlAssinado = service.signXML(xml);
         
         console.log("Transmitindo para SEFAZ...");
-        console.log("Ambiente SEFAZ (tpAmb):", tpAmb === 1 ? "PRODUÇÃO" : "HOMOLOGAÇÃO");
         
         // cUF: 35 = São Paulo (ideal: mapear pela UF do emitente)
         const cUF = 35;
         
         const retornoSefaz = await service.transmit(xmlAssinado, tpAmb, cUF);
-        console.log("RETORNO SEFAZ (inicio):", String(retornoSefaz).slice(0, 1200));
 
+        // 5. Processamento da Resposta da SEFAZ
+        const result = await parseXml(retornoSefaz, { explicitArray: false });
 
-        // 5. Processamento da Resposta da SEFAZ (cStat)
-        //const result = await parseXml(retornoSefaz, { explicitArray: false });
-        // A estrutura do XML de resposta (SOAP) é complexa. O caminho abaixo é o padrão:
-        //const nfeAutorizacaoResult = result['soap12:Envelope']['soap12:Body']['nfeAutorizacaoLoteResult']['retEnviNFe']; **** CORRIGINDO
+        // helper: pega nó mesmo com namespaces / estruturas diferentes
+        const first = (v) => (Array.isArray(v) ? v[0] : v);
 
-const result = await parseXml(retornoSefaz, { explicitArray: false });
+        const findNode = (obj, wantedKey) => {
+          if (!obj) return null;
+          if (Array.isArray(obj)) {
+            for (const item of obj) {
+              const found = findNode(item, wantedKey);
+              if (found) return found;
+            }
+            return null;
+          }
+          if (typeof obj !== "object") return null;
 
-// helper: pega nó mesmo com namespaces / estruturas diferentes
-const first = (v) => (Array.isArray(v) ? v[0] : v);
+          if (Object.prototype.hasOwnProperty.call(obj, wantedKey)) {
+            return obj[wantedKey];
+          }
 
-const findNode = (obj, wantedKey) => {
-  if (!obj) return null;
-  if (Array.isArray(obj)) {
-    for (const item of obj) {
-      const found = findNode(item, wantedKey);
-      if (found) return found;
-    }
-    return null;
-  }
-  if (typeof obj !== "object") return null;
+          for (const k of Object.keys(obj)) {
+            const found = findNode(obj[k], wantedKey);
+            if (found) return found;
+          }
+          return null;
+        };
 
-  if (Object.prototype.hasOwnProperty.call(obj, wantedKey)) {
-    return obj[wantedKey];
-  }
+        const retEnviNFe = findNode(result, "retEnviNFe");
 
-  for (const k of Object.keys(obj)) {
-    const found = findNode(obj[k], wantedKey);
-    if (found) return found;
-  }
-  return null;
-};
+        if (!retEnviNFe) {
+          throw new Error("Não encontrei retEnviNFe na resposta. Retorno: " + String(retornoSefaz).slice(0, 900));
+        }
 
-// ✅ SEFAZ SP costuma voltar como <nfeResultMsg>...</nfeResultMsg>
-// então a forma mais robusta é achar retEnviNFe em qualquer lugar:
-const retEnviNFeRaw = findNode(result, "retEnviNFe");
-const retEnviNFe = first(retEnviNFeRaw);
-const chNFeAutorizada = String(first(infProt?.chNFe) || '').replace(/\D/g, '');
+        const protNFe = first(retEnviNFe.protNFe);
+        const infProt = first(protNFe?.infProt);
 
-if (!retEnviNFe) {
-  throw new Error("Não encontrei retEnviNFe na resposta. Retorno: " + String(retornoSefaz).slice(0, 900));
-}
+        // ✅ regra correta:
+        // - se existir infProt => cStat da NOTA é o que manda (100/225/etc)
+        // - senão => usa cStat do LOTE (103/104/etc)
+        const cStatLote = first(retEnviNFe.cStat);
+        const xMotivoLote = first(retEnviNFe.xMotivo);
 
-const protNFe = first(retEnviNFe.protNFe);
-const infProt = first(protNFe?.infProt);
+        const cStatNota = first(infProt?.cStat);
+        const xMotivoNota = first(infProt?.xMotivo);
+        const protocolo = first(infProt?.nProt) || null;
 
-// ✅ regra correta:
-// - se existir infProt => cStat da NOTA é o que manda (100/225/etc)
-// - senão => usa cStat do LOTE (103/104/etc)
-const cStatLote = first(retEnviNFe.cStat);
-const xMotivoLote = first(retEnviNFe.xMotivo);
+        const cStat = String(cStatNota || cStatLote || "");
+        const xMotivo = String(xMotivoNota || xMotivoLote || "Sem motivo informado");
 
-const cStatNota = first(infProt?.cStat);
-const xMotivoNota = first(infProt?.xMotivo);
-const protocolo = first(infProt?.nProt) || null;
+        console.log("SEFAZ cStatLote:", cStatLote, "| cStatNota:", cStatNota, "| FINAL:", cStat, "| motivo:", xMotivo);
+          
+        // =============================
+        // 6) TRATAMENTO DO cStat
+        // =============================
+        let newStatus = 'error';
 
-const cStat = String(cStatNota || cStatLote || "");
-const xMotivo = String(xMotivoNota || xMotivoLote || "Sem motivo informado");
+        // ✅ 100 = AUTORIZADA
+        if (cStat === '100') {
+          newStatus = 'authorized';
 
-console.log("SEFAZ cStatLote:", cStatLote, "| cStatNota:", cStatNota, "| FINAL:", cStat, "| motivo:", xMotivo);
-  
-// =============================
-// 6) TRATAMENTO DO cStat (CORRETO)
-// =============================
-let newStatus = 'error';
+          const chNFeAutorizada = String(infProt?.chNFe || '').replace(/\D/g, '');
+          if (!/^\d{44}$/.test(chNFeAutorizada)) {
+            throw new Error("Autorizou (100), mas não veio chNFe válida em infProt.");
+          }
 
-// ✅ 100 = AUTORIZADA
-if (cStat === '100') {
-  newStatus = 'authorized';
+          // extrai serie/numero da chave autorizada
+          const serieFromKey = String(Number(chNFeAutorizada.slice(22, 25))); // "001" -> "1"
+          const nNFfromKey   = String(Number(chNFeAutorizada.slice(25, 34))); // "000000189" -> "189"
 
-  const chNFeAutorizada = String(infProt?.chNFe || '').replace(/\D/g, '');
-  if (!/^\d{44}$/.test(chNFeAutorizada)) {
-    throw new Error("Autorizou (100), mas não veio chNFe válida em infProt.");
-  }
+          console.log(`NFe Autorizada! Protocolo: ${protocolo} | chNFe: ${chNFeAutorizada}`);
 
-  // extrai serie/numero da chave autorizada
-  const serieFromKey = String(Number(chNFeAutorizada.slice(22, 25))); // "001" -> "1"
-  const nNFfromKey   = String(Number(chNFeAutorizada.slice(25, 34))); // "000000189" -> "189"
+          await prisma.nfeDocumento.update({
+            where: { id },
+            data: {
+              status: newStatus,
+              xmlAssinado: xmlAssinado,
+              protocoloAutorizacao: protocolo,
 
-  console.log(`NFe Autorizada! Protocolo: ${protocolo} | chNFe: ${chNFeAutorizada}`);
+              // ✅ CHAVE/NUMERAÇÃO OFICIAL
+              chaveAcesso: chNFeAutorizada,
+              serie: serieFromKey,
+              numero: nNFfromKey,
 
-  await prisma.nfeDocumento.update({
-    where: { id },
-    data: {
-      status: newStatus,
-      xmlAssinado: xmlAssinado,
-      protocoloAutorizacao: protocolo,
+              // ✅ garante que DANFE/histórico pegue do fullData também
+              fullData: {
+                ...(nfeDoc.fullData || {}),
+                chaveAcesso: chNFeAutorizada,
+                serie: serieFromKey,
+                numero: nNFfromKey,
+                protocoloAutorizacao: protocolo,
+                status: newStatus,
+                xmlAssinado: xmlAssinado,
+              },
+            }
+          });
 
-      // ✅ CHAVE/NUMERAÇÃO OFICIAL
-      chaveAcesso: chNFeAutorizada,
-      serie: serieFromKey,
-      numero: nNFfromKey,
+          return res.json({
+            sucesso: true,
+            xml: xmlAssinado,
+            status: newStatus,
+            protocolo,
+            chNFe: chNFeAutorizada,        // compat
+            chaveAcesso: chNFeAutorizada,  // ✅ oficial
+            serie: serieFromKey,
+            numero: nNFfromKey,
+          });
+        }
 
-      // ✅ garante que DANFE/histórico pegue do fullData também
-      fullData: {
-        ...(nfeDoc.fullData || {}),
-        chaveAcesso: chNFeAutorizada,
-        serie: serieFromKey,
-        numero: nNFfromKey,
-        protocoloAutorizacao: protocolo,
-        status: newStatus,
-        xmlAssinado: xmlAssinado,
-      },
-    }
-  });
+        // ✅ 103/104 = processamento / lote processado
+        if (cStat === '103' || cStat === '104') {
+          newStatus = 'processing';
+          console.warn(`Lote em Processamento/Processado. Motivo: ${xMotivo}`);
 
-  return res.json({
-    sucesso: true,
-    xml: xmlAssinado,
-    status: newStatus,
-    protocolo,
-    chNFe: chNFeAutorizada,        // compat
-    chaveAcesso: chNFeAutorizada,  // ✅ oficial
-    serie: serieFromKey,
-    numero: nNFfromKey,
-  });
-}
+          await prisma.nfeDocumento.update({
+            where: { id },
+            data: { status: newStatus }
+          });
 
-// ✅ 103/104 = processamento / lote processado
-if (cStat === '103' || cStat === '104') {
-  newStatus = 'processing';
-  console.warn(`Lote em Processamento/Processado. Motivo: ${xMotivo}`);
+          return res.json({ sucesso: true, status: newStatus, motivo: xMotivo });
+        }
 
-  await prisma.nfeDocumento.update({
-    where: { id },
-    data: { status: newStatus }
-  });
+        // ❌ demais = rejeição
+        newStatus = 'rejected';
+        console.error(`Rejeição NFe: [${cStat}] ${xMotivo}`);
 
-  return res.json({ sucesso: true, status: newStatus, motivo: xMotivo });
-}
+        await prisma.nfeDocumento.update({
+          where: { id },
+          data: { status: newStatus }
+        });
 
-// ❌ demais = rejeição
-newStatus = 'rejected';
-console.error(`Rejeição NFe: [${cStat}] ${xMotivo}`);
-
-await prisma.nfeDocumento.update({
-  where: { id },
-  data: { status: newStatus }
-});
-
-return res.status(400).json({
-  sucesso: false,
-  status: newStatus,
-  erro: `Rejeição [${cStat || '??'}]: ${xMotivo}`
-});
+        return res.status(400).json({
+          sucesso: false,
+          status: newStatus,
+          erro: `Rejeição [${cStat || '??'}]: ${xMotivo}`
+        });
 
 
     } catch (error) {
@@ -1970,8 +2000,6 @@ app.put('/api/nfe/:id/status', async (req, res) => {
     res.status(500).json({ error: 'Erro ao atualizar status' });
   }
 });
-
-
 
 // Inicia o servidor
 app.listen(PORT, () => {
