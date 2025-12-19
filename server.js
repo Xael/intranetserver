@@ -133,25 +133,31 @@ class NFeService {
     };
   }
 
-  // monta dhEmi coerente com AAMM da chave
+  // ✅ CORRIGIDO: monta dhEmi usando a data do usuário (se houver) e fuso BR
   makeDhEmiFromKey(dataEmissao, AAMM) {
-    // se veio dataEmissao do seu sistema, usa, mas garante mês/ano da chave
-    const yy = Number("20" + AAMM.slice(0, 2));
-    const mm = Number(AAMM.slice(2, 4)); // 1..12
-
+    // 1. Se o usuário mandou data, usa. Se não, usa Agora.
     let d = dataEmissao ? new Date(dataEmissao) : new Date();
 
-    // força ano/mês da chave (evita divergência com a chave)
+    // Lógica para garantir que o Ano/Mês batam com a chave (AAMM)
+    // Isso previne rejeição se você emitir uma nota com chave de Jan em Fev
+    const yy = Number("20" + AAMM.slice(0, 2));
+    const mm = Number(AAMM.slice(2, 4));
+
     if (!Number.isNaN(yy) && !Number.isNaN(mm) && mm >= 1 && mm <= 12) {
-      const day = Math.min(d.getDate() || 1, 28); // evita estourar mês
-      d = new Date(yy, mm - 1, day, d.getHours(), d.getMinutes(), d.getSeconds());
+      // Se o mês da data escolhida não bate com a chave, ajusta para o mês da chave
+      // mas tenta manter o dia e a hora que o usuário escolheu
+      if (d.getMonth() + 1 !== mm || d.getFullYear() !== yy) {
+         const safeDay = Math.min(d.getDate() || 1, 28);
+         d = new Date(yy, mm - 1, safeDay, d.getHours(), d.getMinutes(), d.getSeconds());
+      }
     }
 
-    // ISO sem offset do sistema, fixando -03:00
-    const isoLocal = new Date(d.getTime() - d.getTimezoneOffset() * 60000)
+    // Tira a diferença do fuso horário do servidor para pegar a hora "crua" e formatar ISO
+    const isoLocal = new Date(d.getTime() - (d.getTimezoneOffset() * 60000))
       .toISOString()
       .slice(0, 19);
 
+    // Força o sufixo -03:00 (Horário de Brasília)
     return isoLocal + "-03:00";
   }
 
