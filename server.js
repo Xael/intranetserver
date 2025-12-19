@@ -1643,21 +1643,86 @@ app.delete('/api/products/:id', authenticateToken, async (req, res) => {
 // --- NFe: NOTAS FISCAIS (CORRIGIDA E INTELIGENTE) ---
 // ==========================================
 
+// ==========================================
+// --- NFe: NOTAS FISCAIS (CORRIGIDA PARA EXIBIR IMPORTADAS) ---
+// ==========================================
+
 app.get('/api/nfe/notas', authenticateToken, async (req, res) => {
   try {
     // Ordena por Data de Emissão (mais recente primeiro)
     const notas = await prisma.nfeDocumento.findMany({ orderBy: { dataEmissao: 'desc' } });
+    
     const mappedNotas = notas.map(n => {
-        const base = n.fullData || {};
+        let base = n.fullData || {};
+
+        // 1. Normalizar Emitente (Se veio de Importação XML, a tag é 'emit')
+        let emitente = base.emitente;
+        if (!emitente && base.emit) {
+            emitente = {
+                cnpj: base.emit.CNPJ,
+                razaoSocial: base.emit.xNome,
+                inscricaoEstadual: base.emit.IE,
+                endereco: {
+                    logradouro: base.emit.enderEmit?.xLgr,
+                    numero: base.emit.enderEmit?.nro,
+                    bairro: base.emit.enderEmit?.xBairro,
+                    municipio: base.emit.enderEmit?.xMun,
+                    uf: base.emit.enderEmit?.UF,
+                    cep: base.emit.enderEmit?.CEP
+                }
+            };
+        }
+
+        // 2. Normalizar Destinatário (Se veio de Importação XML, a tag é 'dest')
+        let destinatario = base.destinatario;
+        if (!destinatario && base.dest) {
+            destinatario = {
+                cnpj: base.dest.CNPJ || base.dest.CPF,
+                razaoSocial: base.dest.xNome,
+                inscricaoEstadual: base.dest.IE,
+                endereco: {
+                    logradouro: base.dest.enderDest?.xLgr,
+                    numero: base.dest.enderDest?.nro,
+                    bairro: base.dest.enderDest?.xBairro,
+                    municipio: base.dest.enderDest?.xMun,
+                    uf: base.dest.enderDest?.UF,
+                    cep: base.dest.enderDest?.CEP
+                }
+            };
+        }
+
+        // 3. Normalizar Produtos (XML usa 'det', sistema usa 'produtos')
+        let produtos = base.produtos;
+        if (!produtos && base.det) {
+            // Se for apenas 1 produto no XML, o xml2js pode não retornar array. Forçamos array.
+            const dets = Array.isArray(base.det) ? base.det : [base.det];
+            produtos = dets.map(d => ({
+                codigo: d.prod.cProd,
+                descricao: d.prod.xProd,
+                ncm: d.prod.NCM,
+                cfop: d.prod.CFOP,
+                unidade: d.prod.uCom,
+                quantidade: d.prod.qCom,
+                valorUnitario: d.prod.vUnCom,
+                valorTotal: d.prod.vProd
+            }));
+        }
+
         return {
             ...base, 
             id: n.id,
             status: n.status,
             chaveAcesso: n.chaveAcesso,
             xmlAssinado: n.xmlAssinado,
-            dataEmissao: n.dataEmissao ? new Date(n.dataEmissao).toISOString() : base.dataEmissao
+            dataEmissao: n.dataEmissao ? new Date(n.dataEmissao).toISOString() : base.dataEmissao,
+            
+            // Aqui está a mágica: entregamos o objeto normalizado ou um objeto vazio seguro
+            emitente: emitente || { cnpj: '', razaoSocial: 'Desconhecido' }, 
+            destinatario: destinatario || { cnpj: '', razaoSocial: 'Desconhecido' },
+            produtos: produtos || []
         };
     });
+    
     res.json(mappedNotas);
   } catch (error) {
     console.error(error);
