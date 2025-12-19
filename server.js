@@ -20,7 +20,7 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 
 // ==================================================================
-// 🚨 CORREÇÃO CRÍTICA: MIDDLEWARES DEVEM VIR ANTES DAS ROTAS 🚨
+// 🚨 CONFIGURAÇÃO DOS MIDDLEWARES (DEVEM VIR ANTES DAS ROTAS) 🚨
 // ==================================================================
 app.use(cors()); // Libera o CORS para todas as origens
 app.use(express.json({ limit: '50mb' })); // Aumentei o limite para XMLs grandes
@@ -214,8 +214,8 @@ class NFeService {
             idDest: "1",
             cMunFG: cMunEmit,
             tpImp: "1",
-            tpEmis: k.tpEmis,          // ✅ bate com a chave
-            cDV: k.cDV,                // ✅ DV da chave
+            tpEmis: k.tpEmis,           // ✅ bate com a chave
+            cDV: k.cDV,                 // ✅ DV da chave
             tpAmb: String(tpAmb),
             finNFe: "1",
             indFinal: "1",
@@ -434,7 +434,6 @@ class NFeService {
   }
 }
 
-// Rota para Importar XML
 // Rota para Importar XML (CORRIGIDA)
 app.post('/api/nfe/importar', async (req, res) => {
   try {
@@ -1640,11 +1639,7 @@ app.delete('/api/products/:id', authenticateToken, async (req, res) => {
 });
 
 // ==========================================
-// --- NFe: NOTAS FISCAIS (CORRIGIDA E INTELIGENTE) ---
-// ==========================================
-
-// ==========================================
-// --- NFe: NOTAS FISCAIS (CORRIGIDA PARA EXIBIR IMPORTADAS) ---
+// --- NFe: NOTAS FISCAIS (BLINDADA CONTRA TELA BRANCA) ---
 // ==========================================
 
 app.get('/api/nfe/notas', authenticateToken, async (req, res) => {
@@ -1652,11 +1647,16 @@ app.get('/api/nfe/notas', authenticateToken, async (req, res) => {
     // Ordena por Data de Emissão (mais recente primeiro)
     const notas = await prisma.nfeDocumento.findMany({ orderBy: { dataEmissao: 'desc' } });
     
+    // Função auxiliar para garantir que NUNCA retorne null/undefined
+    const safeStr = (v) => (v === null || v === undefined) ? '' : String(v);
+
     const mappedNotas = notas.map(n => {
         let base = n.fullData || {};
 
-        // 1. Normalizar Emitente (Se veio de Importação XML, a tag é 'emit')
-        let emitente = base.emitente;
+        // 1. Normalizar Emitente
+        let emitente = base.emitente; // Formato Manual
+        
+        // Se não tem formato manual, tenta pegar do XML (tag 'emit')
         if (!emitente && base.emit) {
             emitente = {
                 cnpj: base.emit.CNPJ,
@@ -1673,8 +1673,18 @@ app.get('/api/nfe/notas', authenticateToken, async (req, res) => {
             };
         }
 
-        // 2. Normalizar Destinatário (Se veio de Importação XML, a tag é 'dest')
-        let destinatario = base.destinatario;
+        // Garante que o objeto emitente e seus campos de texto existam
+        const emitenteFinal = {
+            cnpj: safeStr(emitente?.cnpj),
+            razaoSocial: safeStr(emitente?.razaoSocial || 'Desconhecido'),
+            inscricaoEstadual: safeStr(emitente?.inscricaoEstadual),
+            endereco: emitente?.endereco || {}
+        };
+
+        // 2. Normalizar Destinatário
+        let destinatario = base.destinatario; // Formato Manual
+
+        // Se não tem formato manual, tenta pegar do XML (tag 'dest')
         if (!destinatario && base.dest) {
             destinatario = {
                 cnpj: base.dest.CNPJ || base.dest.CPF,
@@ -1691,41 +1701,54 @@ app.get('/api/nfe/notas', authenticateToken, async (req, res) => {
             };
         }
 
-        // 3. Normalizar Produtos (XML usa 'det', sistema usa 'produtos')
+        // Garante que o objeto destinatario e seus campos de texto existam
+        const destinatarioFinal = {
+            cnpj: safeStr(destinatario?.cnpj),
+            razaoSocial: safeStr(destinatario?.razaoSocial || 'Consumidor Final'),
+            inscricaoEstadual: safeStr(destinatario?.inscricaoEstadual),
+            endereco: destinatario?.endereco || {}
+        };
+
+        // 3. Normalizar Produtos
         let produtos = base.produtos;
         if (!produtos && base.det) {
-            // Se for apenas 1 produto no XML, o xml2js pode não retornar array. Forçamos array.
             const dets = Array.isArray(base.det) ? base.det : [base.det];
             produtos = dets.map(d => ({
-                codigo: d.prod.cProd,
-                descricao: d.prod.xProd,
-                ncm: d.prod.NCM,
-                cfop: d.prod.CFOP,
-                unidade: d.prod.uCom,
-                quantidade: d.prod.qCom,
-                valorUnitario: d.prod.vUnCom,
-                valorTotal: d.prod.vProd
+                codigo: safeStr(d.prod?.cProd),
+                descricao: safeStr(d.prod?.xProd),
+                ncm: safeStr(d.prod?.NCM),
+                cfop: safeStr(d.prod?.CFOP),
+                unidade: safeStr(d.prod?.uCom),
+                quantidade: d.prod?.qCom,
+                valorUnitario: d.prod?.vUnCom,
+                valorTotal: d.prod?.vProd
             }));
         }
 
         return {
             ...base, 
             id: n.id,
-            status: n.status,
-            chaveAcesso: n.chaveAcesso,
-            xmlAssinado: n.xmlAssinado,
-            dataEmissao: n.dataEmissao ? new Date(n.dataEmissao).toISOString() : base.dataEmissao,
             
-            // Aqui está a mágica: entregamos o objeto normalizado ou um objeto vazio seguro
-            emitente: emitente || { cnpj: '', razaoSocial: 'Desconhecido' }, 
-            destinatario: destinatario || { cnpj: '', razaoSocial: 'Desconhecido' },
+            // BLINDAGEM: Campos que o frontend usa no filtro (.includes)
+            // Se vier null do banco, transformamos em string vazia ''
+            status: safeStr(n.status || base.status || 'draft'),
+            numero: safeStr(n.numero || base.numero),
+            serie: safeStr(n.serie || base.serie),
+            chaveAcesso: safeStr(n.chaveAcesso || base.chaveAcesso),
+            xmlAssinado: safeStr(n.xmlAssinado),
+            
+            dataEmissao: n.dataEmissao ? new Date(n.dataEmissao).toISOString() : (base.dataEmissao || new Date().toISOString()),
+            
+            emitente: emitenteFinal,
+            destinatario: destinatarioFinal,
             produtos: produtos || []
         };
     });
     
     res.json(mappedNotas);
   } catch (error) {
-    console.error(error);
+    console.error("Erro ao listar notas:", error);
+    // Em caso de erro grave, retorna array vazio para não travar a tela
     res.json([]);
   }
 });
@@ -1734,16 +1757,16 @@ app.get('/api/nfe/notas', authenticateToken, async (req, res) => {
 app.post('/api/nfe/notas', authenticateToken, async (req, res) => {
   const invoiceData = req.body;
   // normaliza chave (somente dígitos)
-if (invoiceData.chaveAcesso) {
-  invoiceData.chaveAcesso = String(invoiceData.chaveAcesso).replace(/\D/g, '');
-}
+  if (invoiceData.chaveAcesso) {
+    invoiceData.chaveAcesso = String(invoiceData.chaveAcesso).replace(/\D/g, '');
+  }
 
-// se a chave tem 44 dígitos, força numero/serie a bater com ela
-if (/^\d{44}$/.test(invoiceData.chaveAcesso)) {
-  // 🚨 CORREÇÃO: Converte para Number e depois String para tirar zeros à esquerda
-  invoiceData.serie = String(Number(invoiceData.chaveAcesso.slice(22, 25)));
-  invoiceData.numero = String(Number(invoiceData.chaveAcesso.slice(25, 34)));
-}
+  // se a chave tem 44 dígitos, força numero/serie a bater com ela
+  if (/^\d{44}$/.test(invoiceData.chaveAcesso)) {
+    // 🚨 CORREÇÃO: Converte para Number e depois String para tirar zeros à esquerda
+    invoiceData.serie = String(Number(invoiceData.chaveAcesso.slice(22, 25)));
+    invoiceData.numero = String(Number(invoiceData.chaveAcesso.slice(25, 34)));
+  }
 
   try {
     // --- 1. LÓGICA DE AUTO-CADASTRO DE DESTINATÁRIO ---
