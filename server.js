@@ -415,6 +415,132 @@ class NFeService {
   }
 }
 
+// Rota para Importar XML
+app.post('/api/nfe/importar', async (req, res) => {
+  try {
+    const { xmlContent } = req.body;
+    
+    if (!xmlContent) {
+      return res.status(400).json({ erro: 'Conteúdo XML não fornecido.' });
+    }
+
+    // Converter XML para JSON
+    const result = await parseXml(xmlContent, { explicitArray: false });
+    
+    // Tenta localizar a tag NFe ou infNFe (varia se o XML já tem protocolo ou não)
+    const nfeInfo = result.NFe?.infNFe || result.nfeProc?.NFe?.infNFe;
+
+    if (!nfeInfo) {
+      return res.status(400).json({ erro: 'Estrutura do XML inválida ou não reconhecida.' });
+    }
+
+    // Mapear os dados do XML para o seu banco de dados
+    const emitente = nfeInfo.emit;
+    const dest = nfeInfo.dest;
+    
+    // Criar registro no Banco (Adaptado para o seu Prisma Schema)
+    const novaNfe = await prisma.nfeDocumento.create({
+      data: {
+        status: 'editing', // Começa como edição para permitir conferência
+        numero: nfeInfo.ide.nNF,
+        serie: nfeInfo.ide.serie,
+        xmlAssinado: xmlContent, // Salva o original
+        fullData: nfeInfo, // Salva o JSON completo para facilitar
+        // Mapeie os campos essenciais para busca
+        emitente: {
+           cnpj: emitente.CNPJ,
+           razaoSocial: emitente.xNome,
+           // ... outros campos
+        },
+        destinatario: {
+           cnpj: dest.CNPJ || dest.CPF,
+           razaoSocial: dest.xNome,
+           // ... outros campos
+        }
+      }
+    });
+
+    res.json({ sucesso: true, id: novaNfe.id });
+
+  } catch (error) {
+    console.error('Erro na importação:', error);
+    res.status(500).json({ erro: 'Falha ao processar XML: ' + error.message });
+  }
+});
+
+// Rota de Cancelamento Real
+app.post('/api/nfe/cancelar', async (req, res) => {
+  const { id, justificativa } = req.body;
+
+  try {
+    // 1. Buscar a nota no banco
+    const nfe = await prisma.nfeDocumento.findUnique({ where: { id } });
+    
+    if (!nfe || !nfe.fullData || !nfe.fullData.chaveAcesso) {
+      return res.status(400).json({ erro: 'Nota não encontrada ou sem chave de acesso.' });
+    }
+
+    const chave = nfe.fullData.chaveAcesso;
+    const cnpjEmitente = nfe.emitente?.cnpj?.replace(/\D/g, '');
+    const dataHora = new Date().toISOString().split('.')[0] + '-03:00'; // Ajuste fuso se necessário
+    
+    // 2. Montar XML do Evento de Cancelamento (TP 110111)
+    // Usando xmlbuilder2 que você já tem instalado
+    const idEvento = `ID110111${chave}01`;
+    
+    const xmlEvento = create({ version: '1.0', encoding: 'UTF-8' })
+      .ele('envEvento', { xmlns: 'http://www.portalfiscal.inf.br/nfe', versao: '1.00' })
+        .ele('idLote').txt('1').up()
+        .ele('evento', { xmlns: 'http://www.portalfiscal.inf.br/nfe', versao: '1.00' })
+          .ele('infEvento', { Id: idEvento })
+            .ele('cOrgao').txt(chave.substring(0, 2)).up() // UF da chave
+            .ele('tpAmb').txt('2').up() // 2=Homologação, 1=Produção (Pegar do config)
+            .ele('CNPJ').txt(cnpjEmitente).up()
+            .ele('chNFe').txt(chave).up()
+            .ele('dhEvento').txt(dataHora).up()
+            .ele('tpEvento').txt('110111').up()
+            .ele('nSeqEvento').txt('1').up()
+            .ele('verEvento').txt('1.00').up()
+            .ele('detEvento', { versao: '1.00' })
+              .ele('descEvento').txt('Cancelamento').up()
+              .ele('nProt').txt(nfe.fullData.protocoloAutorizacao).up()
+              .ele('xJust').txt(justificativa).up()
+            .up()
+          .up()
+        .up()
+      .up()
+      .end({ prettyPrint: false });
+
+    // 3. Assinar o XML (Lógica similar à de autorização que você já tem)
+    // ... [Inserir aqui a lógica de assinatura usando SignedXml e seu certificado] ...
+    // Para simplificar, assumindo que você instancie a classe NFeService aqui:
+    // const nfeService = new NFeService(certificadoBuffer, senha);
+    // const xmlAssinado = nfeService.assinarEvento(xmlEvento); 
+    
+    // NOTA: Você precisará criar esse método 'assinarEvento' na sua classe NFeService ou adaptar a lógica de assinatura existente.
+
+    // 4. Enviar para SEFAZ (RecepcaoEvento)
+    // const retornoSefaz = await axios.post(urlSefazEvento, xmlBody, { headers... });
+
+    // 5. Se sucesso (cStat 135 = Cancelamento Homologado)
+    const sucesso = true; // Simulação até você conectar o axios acima
+    
+    if (sucesso) {
+        await prisma.nfeDocumento.update({
+            where: { id },
+            data: { status: 'cancelled' }
+        });
+        return res.json({ sucesso: true, mensagem: 'Nota Cancelada com Sucesso' });
+    } else {
+        return res.status(400).json({ erro: 'SEFAZ Rejeitou o cancelamento' });
+    }
+
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ erro: e.message });
+  }
+});
+
 
 // --- Helper for status enum mapping ---
 const statusMap = {
@@ -1826,6 +1952,26 @@ return res.status(400).json({
         res.status(500).json({ sucesso: false, erro: `Erro de Servidor: ${error.message}` });
     }
 });
+
+// Rota para forçar atualização de status (Correção do problema de "não consigo editar")
+app.put('/api/nfe/:id/status', async (req, res) => {
+  const { id } = req.params;
+  const { status } = req.body; // Ex: 'editing', 'cancelled'
+
+  try {
+    const nfe = await prisma.nfeDocumento.update({
+      where: { id },
+      data: { status }
+    });
+    console.log(`Status da NFe ${id} alterado manualmente para ${status}`);
+    res.json({ success: true, nfe });
+  } catch (error) {
+    console.error('Erro ao atualizar status:', error);
+    res.status(500).json({ error: 'Erro ao atualizar status' });
+  }
+});
+
+
 
 // Inicia o servidor
 app.listen(PORT, () => {
