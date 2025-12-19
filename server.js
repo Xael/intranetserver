@@ -454,12 +454,13 @@ app.post('/api/nfe/importar', async (req, res) => {
     const dest = nfeInfo.dest;
     
     // Criar registro no Banco (Adaptado para o seu Prisma Schema)
-    const novaNfe = await prisma.nfeDocumento.create({
-      data: {
-        status: 'editing', // Começa como edição para permitir conferência
-        numero: nfeInfo.ide.nNF,
-        serie: nfeInfo.ide.serie,
-        xmlAssinado: xmlContent, // Salva o original
+const novaNfe = await prisma.nfeDocumento.create({
+  data: {
+    status: 'editing',
+    // Força a conversão para String antes de enviar ao Prisma
+    numero: String(nfeInfo.ide.nNF), 
+    serie: String(nfeInfo.ide.serie),
+    xmlAssinado: xmlContent,
         fullData: nfeInfo, // Salva o JSON completo para facilitar
         // Mapeie os campos essenciais para busca
         emitente: {
@@ -1679,8 +1680,9 @@ if (invoiceData.chaveAcesso) {
 
 // se a chave tem 44 dígitos, força numero/serie a bater com ela
 if (/^\d{44}$/.test(invoiceData.chaveAcesso)) {
-  invoiceData.serie = Number(invoiceData.chaveAcesso.slice(22, 25));
-  invoiceData.numero = Number(invoiceData.chaveAcesso.slice(25, 34));
+  // Converte para Number para tirar os zeros a esquerda, mas volta para String pro Banco
+  invoiceData.serie = String(Number(invoiceData.chaveAcesso.slice(22, 25)));
+  invoiceData.numero = String(Number(invoiceData.chaveAcesso.slice(25, 34)));
 }
 
   try {
