@@ -435,6 +435,7 @@ class NFeService {
 }
 
 // Rota para Importar XML
+// Rota para Importar XML (CORRIGIDA)
 app.post('/api/nfe/importar', async (req, res) => {
   try {
     const { xmlContent } = req.body;
@@ -446,36 +447,31 @@ app.post('/api/nfe/importar', async (req, res) => {
     // Converter XML para JSON
     const result = await parseXml(xmlContent, { explicitArray: false });
     
-    // Tenta localizar a tag NFe ou infNFe (varia se o XML já tem protocolo ou não)
+    // Tenta localizar a tag NFe ou infNFe
     const nfeInfo = result.NFe?.infNFe || result.nfeProc?.NFe?.infNFe;
 
     if (!nfeInfo) {
       return res.status(400).json({ erro: 'Estrutura do XML inválida ou não reconhecida.' });
     }
 
-    // Mapear os dados do XML para o seu banco de dados
     const emitente = nfeInfo.emit;
     const dest = nfeInfo.dest;
     
-    // Criar registro no Banco (Adaptado para o seu Prisma Schema)
+    // Criar registro no Banco
     const novaNfe = await prisma.nfeDocumento.create({
       data: {
         status: 'editing', 
-        // 🚨 CORREÇÃO: Forçar STRING para evitar erro do Prisma (Int vs String)
-        numero: String(nfeInfo.ide.nNF),
+        numero: String(nfeInfo.ide.nNF), // Já está com String(), ótimo.
         serie: String(nfeInfo.ide.serie),
         xmlAssinado: xmlContent, 
         fullData: nfeInfo, 
         chaveAcesso: nfeInfo['@Id']?.replace('NFe', '') || null,
-        emitenteCnpj: emitente.CNPJ,
-        emitente: {
-           cnpj: emitente.CNPJ,
-           razaoSocial: emitente.xNome,
-        },
-        destinatario: {
-           cnpj: dest.CNPJ || dest.CPF,
-           razaoSocial: dest.xNome,
-        }
+        // Removemos caracteres não numéricos do CNPJ para evitar erro de validação
+        emitenteCnpj: String(emitente.CNPJ).replace(/\D/g, ''),
+        
+        // 🚨 REMOVIDO DAQUI: emitente: { ... } e destinatario: { ... }
+        // Motivo: O Prisma Schema não tem essas colunas como objetos na tabela NfeDocumento.
+        // Esses dados já estão salvos dentro de 'fullData' acima.
       }
     });
 
